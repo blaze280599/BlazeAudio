@@ -1,6 +1,6 @@
 # BlazeAudio
 
-An HDR music visualizer for Windows. It captures whatever your PC is playing through WASAPI loopback, reads now-playing info and album art from Spotify (or any media app) through Windows' media session API, and renders audio-reactive visuals (Faulty Terminal and Gradient ASCII) with DirectX 12.
+An HDR music visualizer for Windows. It captures whatever your PC is playing through WASAPI loopback, reads now-playing info and album art from Spotify (or any media app) through Windows' media session API, and renders audio-reactive visuals (Faulty Terminal, Gradient ASCII and Phosphor Scope) with DirectX 12.
 
 Everything ships in one self-contained `blazeaudio.exe` (static CRT, system DLLs only). There's nothing to install.
 
@@ -25,7 +25,11 @@ A flickering CRT full of procedural glyphs. The columns form a spectrum analyzer
 
 A soft light seen through a grid of monospaced characters (` =+xX0S8#@`), brighter cells using denser glyphs. Pick the light's shape in **Visuals**: Horizon (a glow over a dark curve), Pinch (a band squeezed in the middle), Rise (a glow coming up from the bottom) or Eclipse (a corona around a dark disc). The edge of the light follows the spectrum and swells with the music, hats make the characters flicker, and each beat sends a ring of scrambled characters out from the light. When the scene comes on, the light fades in from its source while the characters decode.
 
-Press `1` / `2` or use the buttons at the top of **Visuals** to switch scenes.
+## Phosphor Scope
+
+A vector oscilloscope on the same curved CRT glass as Faulty Terminal. The beam traces the live waveform and leaves a phosphor afterglow: fresh trace runs hot toward white and cools to the palette's darkest colour as it fades. Pick a mode in **Visuals**: Y-T (a classic sweep triggered on a rising zero crossing) or Polar (the sweep wrapped around a slowly turning circle). Like a real beam, slow parts of the trace glow brighter than fast ones. Beats flare the beam and punch the trace outward, every fourth beat tears a few rows sideways, hats shake the beam, louder passages lengthen the afterglow, and the graticule lines light up with the spectrum. Persistence, beam width and gain are adjustable.
+
+Press `1` / `2` / `3` or use the buttons at the top of **Visuals** to switch scenes.
 
 ## Volume
 
@@ -52,7 +56,7 @@ To keep it on a second monitor while you game or work, drag the window there and
 | `F1` / `Tab` | Show / hide the sidebar |
 | `F11` / `F` / `Alt+Enter` / double-click | Borderless fullscreen |
 | `O` | Overlay mode |
-| `1` / `2` | Faulty Terminal / Gradient ASCII |
+| `1` / `2` / `3` | Faulty Terminal / Gradient ASCII / Phosphor Scope |
 | `T` | Show now-playing card |
 | `Up` / `Down` | Volume up / down 2% |
 | `M` | Mute / unmute |
@@ -71,7 +75,7 @@ Fullscreen and overlay hide the sidebar so the visuals get the whole screen; pre
 
 The sections:
 
-- **Visuals**: scene, Gradient ASCII shape, cell size, density, glyph and gradient opacity, intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs).
+- **Visuals**: scene, Gradient ASCII shape, cell size, density, glyph and gradient opacity, Phosphor Scope mode, persistence, beam width and gain, intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs).
 - **Audio**: sensitivity, attack (how fast bars rise), decay (how fast they fall), beat sensitivity.
 - **Palette**: album-art colors on/off, fallback palette, swatches of the current colors.
 - **Window**: mode, overlay opacity, overlay click-through, startup mode, idle frame-rate cap, now-playing card, volume bar, performance stats.
@@ -94,6 +98,7 @@ Settings are saved to `%APPDATA%\BlazeAudio\settings.json` when you close the pa
 - **Volume**: `IAudioEndpointVolume` on the default render endpoint, owned by a worker thread that applies changes from the UI and re-reads the level every 250 ms (re-resolving the default device every 2 s).
 - **Rendering** (wgpu → DX12):
   - The scene draws into an Rgba16Float target sized to the area beside the sidebar.
+  - Phosphor Scope keeps its afterglow in a pair of R16Float textures that swap every frame: the previous frame fades in, then the beam is drawn on top as one instanced quad per waveform segment, max-blended so overlaps don't blow out. The analyzer publishes the last 2048 samples alongside the bands for it.
   - It's driven by smoothed bands, kick/hat envelopes, the beat count, and a "flow" clock that idles slowly and surges with the music.
   - Bloom clamps NaN and infinite values out of the scene, so a single bad pixel can't be smeared across the frame.
   - Bloom is Jimenez's 13-tap downsample with a Karis average and soft-knee threshold, plus a tent upsample over 6 mips.
@@ -130,7 +135,7 @@ The output is `target\release\blazeaudio.exe`. `.cargo/config.toml` enables `+cr
 target/release/blazeaudio.exe --snapshot out
 ```
 
-This runs headless: no window opens. It synthesizes a 124 BPM track, runs it through the real analyzer, and renders the visualizer offscreen to PNGs: Faulty Terminal on a beat and between beats, then Gradient ASCII in each of its four shapes. It also writes:
+This runs headless: no window opens. It synthesizes a 124 BPM track, runs it through the real analyzer, and renders the visualizer offscreen to PNGs: Faulty Terminal on a beat and between beats, then Gradient ASCII in each of its four shapes, then Phosphor Scope in both of its modes. It also writes:
 
 - `report.txt`: init time, frame time, detected beats with their phase, and the BPM estimate
 - `onset_trace.csv`: the onset and threshold curve from the audio-only check
@@ -158,7 +163,7 @@ src/
   settings.rs   settings model and persistence
   sys.rs        global hotkeys, CPU/RAM stats, working-set trim, overlay window fix
   snapshot.rs   headless self-test
-  shaders/      terminal.wgsl, ascii.wgsl (the scenes), common.wgsl, post.wgsl (bloom + tonemap)
+  shaders/      terminal.wgsl, ascii.wgsl, scope.wgsl (the scenes), common.wgsl, post.wgsl (bloom + tonemap)
 ```
 
 ## Credits

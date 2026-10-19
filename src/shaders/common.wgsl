@@ -8,14 +8,19 @@ struct Globals {
   exposure: f32, chromatic: f32, grain: f32, vignette: f32,
   energy: f32, beat_age: f32, scene_time: f32, a_shape: f32,
   a_cell: f32, a_density: f32, a_glyphs: f32, a_gradient: f32,
-  a_count: f32, _pad0: f32, _pad1: f32, _pad2: f32,
+  a_count: f32, s_mode: f32, s_decay: f32, s_beam: f32,
+  s_gain: f32, s_trigger: f32, s_points: f32, _pad0: f32,
   pal: array<vec4f, 4>,
   // Palette in Oklab, sorted darkest to brightest (Gradient ASCII ramp).
   pal_lab: array<vec4f, 4>,
 };
 
+const WAVE_LEN: u32 = 2048u;
+
 struct AudioData {
   bands: array<f32, 64>,
+  // Phosphor Scope: mono waveform, gain-normalized, oldest first.
+  wave: array<f32, 2048>,
 };
 
 @group(0) @binding(0) var<uniform> G: Globals;

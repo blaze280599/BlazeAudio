@@ -1,5 +1,5 @@
-//! wgpu (DX12) renderer: the active scene (Faulty Terminal or Gradient ASCII) into an HDR
-//! target, bloom chain, ACES tonemap, egui.
+//! wgpu (DX12) renderer: the active scene (Faulty Terminal, Gradient ASCII or Phosphor Scope)
+//! into an HDR target, bloom chain, ACES tonemap, egui.
 
 use std::borrow::Cow;
 
@@ -9,11 +9,15 @@ use crate::settings::Scene;
 
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const BLOOM_LEVELS: usize = 6;
-pub const AUDIO_FLOATS: usize = 64;
+/// Phosphor Scope afterglow (beam intensity only; the palette is applied when compositing).
+const PERSIST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+/// Bands, then the scope's waveform.
+pub const AUDIO_FLOATS: usize = 64 + crate::audio::WAVE_LEN;
 
 const COMMON: &str = include_str!("shaders/common.wgsl");
 const TERMINAL: &str = include_str!("shaders/terminal.wgsl");
 const ASCII: &str = include_str!("shaders/ascii.wgsl");
+const SCOPE: &str = include_str!("shaders/scope.wgsl");
 
 /// Characters for Gradient ASCII, dimmest to brightest.
 pub const ASCII_CHARS: &str = " =+xX0S8#@";
@@ -52,7 +56,13 @@ pub struct Globals {
     pub a_glyphs: f32,
     pub a_gradient: f32,
     pub a_count: f32,
-    pub _pad: [f32; 3],
+    pub s_mode: f32,
+    pub s_decay: f32,
+    pub s_beam: f32,
+    pub s_gain: f32,
+    pub s_trigger: f32,
+    pub s_points: f32,
+    pub _pad: f32,
     pub pal: [[f32; 4]; 4],
     pub pal_lab: [[f32; 4]; 4],
 }
@@ -82,6 +92,9 @@ struct Targets {
     w: u32,
     h: u32,
     scene: Tex,
+    /// Phosphor Scope afterglow, ping-ponged each frame, and a bind group reading each.
+    persist: [Tex; 2],
+    bg_persist: [wgpu::BindGroup; 2],
     bloom: Vec<Tex>,
     /// Input of each bloom downsample level (level 0 reads the scene).
     bg_down: Vec<wgpu::BindGroup>,
@@ -93,6 +106,9 @@ struct Targets {
 struct Pipelines {
     terminal: wgpu::RenderPipeline,
     ascii: wgpu::RenderPipeline,
+    scope_decay: wgpu::RenderPipeline,
+    scope_beam: wgpu::RenderPipeline,
+    scope: wgpu::RenderPipeline,
     down_first: wgpu::RenderPipeline,
     down: wgpu::RenderPipeline,
     up: wgpu::RenderPipeline,
@@ -120,6 +136,10 @@ pub struct Gpu {
     _atlas: wgpu::Texture,
     bg_atlas: wgpu::BindGroup,
     pub scene: Scene,
+    /// Scene drawn last frame; switching to the scope clears its stale afterglow.
+    last_scene: Scene,
+    /// Which `persist` texture holds the newest afterglow.
+    persist_idx: usize,
     targets: Targets,
     /// Area of the swapchain the scene is drawn into (x, y, w, h in physical pixels); the rest
     /// belongs to docked UI panels.
@@ -310,6 +330,7 @@ impl Gpu {
         };
         let m_terminal = module("terminal", TERMINAL);
         let m_ascii = module("ascii", ASCII);
+        let m_scope = module("scope", SCOPE);
         let m_post = module("post", POST);
 
         let additive = wgpu::BlendState {
@@ -349,9 +370,49 @@ impl Gpu {
             })
         };
 
+        // Scope beam: one instanced quad per segment, max-blended so overlapping segments
+        // don't stack into a blown-out blob where the trace doubles back.
+        let beam = || {
+            let max = wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Max,
+            };
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("vs_beam"),
+                layout: Some(&pl_g0),
+                vertex: wgpu::VertexState {
+                    module: &m_scope,
+                    entry_point: Some("vs_beam"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &m_scope,
+                    entry_point: Some("fs_beam"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: PERSIST_FORMAT,
+                        blend: Some(wgpu::BlendState { color: max, alpha: max }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            })
+        };
+
         let pipes = std::thread::scope(|s| {
             let h_terminal = s.spawn(|| full(&pl_g0, &m_terminal, "fs_terminal", HDR_FORMAT, None));
             let h_ascii = s.spawn(|| full(&pl_tex1, &m_ascii, "fs_ascii", HDR_FORMAT, None));
+            let h_scope = s.spawn(|| {
+                let decay = full(&pl_tex1, &m_scope, "fs_decay", PERSIST_FORMAT, None);
+                let scope = full(&pl_tex1, &m_scope, "fs_scope", HDR_FORMAT, None);
+                (decay, beam(), scope)
+            });
             let h_post = s.spawn(|| {
                 let down_first = full(&pl_tex1, &m_post, "fs_down_first", HDR_FORMAT, None);
                 let down = full(&pl_tex1, &m_post, "fs_down", HDR_FORMAT, None);
@@ -360,7 +421,18 @@ impl Gpu {
                 (down_first, down, up, tonemap)
             });
             let (down_first, down, up, tonemap) = h_post.join().unwrap();
-            Pipelines { terminal: h_terminal.join().unwrap(), ascii: h_ascii.join().unwrap(), down_first, down, up, tonemap }
+            let (scope_decay, scope_beam, scope) = h_scope.join().unwrap();
+            Pipelines {
+                terminal: h_terminal.join().unwrap(),
+                ascii: h_ascii.join().unwrap(),
+                scope_decay,
+                scope_beam,
+                scope,
+                down_first,
+                down,
+                up,
+                tonemap,
+            }
         });
 
         let atlas = build_atlas(&device, &queue);
@@ -394,6 +466,8 @@ impl Gpu {
             _atlas: atlas,
             bg_atlas,
             scene: Scene::Terminal,
+            last_scene: Scene::Terminal,
+            persist_idx: 0,
             targets,
             viewport: [0, 0, width.max(1), height.max(1)],
             egui,
@@ -479,12 +553,44 @@ impl Gpu {
 
     /// Encode a full frame: scene -> bloom -> tonemap into `out`.
     pub fn encode(&mut self, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView, overlay: bool) {
+        let fresh = self.scene != self.last_scene;
+        self.last_scene = self.scene;
+        if self.scene == Scene::Scope {
+            self.persist_idx ^= 1;
+        }
         let t = &self.targets;
         let black = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
         match self.scene {
             Scene::Terminal => Self::fullscreen_pass(enc, &t.scene.view, black, &self.pipes.terminal, &self.g0, None),
             Scene::GradientAscii => {
                 Self::fullscreen_pass(enc, &t.scene.view, black, &self.pipes.ascii, &self.g0, Some(&self.bg_atlas))
+            }
+            Scene::Scope => {
+                let (cur, prev) = (self.persist_idx, self.persist_idx ^ 1);
+                // Afterglow: last frame faded (or nothing, right after switching here)...
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("scope"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &t.persist[cur].view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: black, store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_bind_group(0, &self.g0, &[]);
+                if !fresh {
+                    pass.set_pipeline(&self.pipes.scope_decay);
+                    pass.set_bind_group(1, &t.bg_persist[prev], &[]);
+                    pass.draw(0..3, 0..1);
+                }
+                // ...then this frame's beam on top.
+                pass.set_pipeline(&self.pipes.scope_beam);
+                pass.draw(0..6, 0..crate::audio::WAVE_LEN as u32 - 1);
+                drop(pass);
+                Self::fullscreen_pass(enc, &t.scene.view, black, &self.pipes.scope, &self.g0, Some(&t.bg_persist[cur]));
             }
         }
 
@@ -680,6 +786,7 @@ fn build_targets(
     h: u32,
 ) -> Targets {
     let scene = make_tex(device, w, h, HDR_FORMAT, "scene");
+    let persist = [make_tex(device, w, h, PERSIST_FORMAT, "persist"), make_tex(device, w, h, PERSIST_FORMAT, "persist")];
     let bloom: Vec<Tex> = (0..BLOOM_LEVELS)
         .map(|i| make_tex(device, (w >> (i + 1)).max(1), (h >> (i + 1)).max(1), HDR_FORMAT, "bloom"))
         .collect();
@@ -695,6 +802,7 @@ fn build_targets(
         .map(|i| if i == 0 { bg1(&scene.view) } else { bg1(&bloom[i - 1].view) })
         .collect();
     let bg_up = (0..BLOOM_LEVELS).map(|i| bg1(&bloom[i].view)).collect();
+    let bg_persist = [bg1(&persist[0].view), bg1(&persist[1].view)];
     let bg_tonemap = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: tex2,
@@ -703,5 +811,5 @@ fn build_targets(
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&bloom[0].view) },
         ],
     });
-    Targets { w, h, scene, bloom, bg_down, bg_up, bg_tonemap }
+    Targets { w, h, scene, persist, bg_persist, bloom, bg_down, bg_up, bg_tonemap }
 }

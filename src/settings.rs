@@ -13,6 +13,18 @@ pub enum WindowMode {
 pub enum Scene {
     Terminal,
     GradientAscii,
+    Scope,
+}
+
+/// How Phosphor Scope plots the waveform (order matches the shader).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum ScopeMode {
+    /// Classic time sweep, triggered on a rising zero crossing. Also read for the X-Y mode
+    /// earlier builds had, so their settings files still load.
+    #[serde(alias = "Xy")]
+    Yt,
+    /// The sweep wrapped around a slowly turning circle.
+    Polar,
 }
 
 /// Light shape for the Gradient ASCII scene (order matches the shader).
@@ -42,6 +54,12 @@ pub struct Settings {
     pub ascii_density: f32,
     pub ascii_glyphs: f32,
     pub ascii_gradient: f32,
+    pub scope_mode: ScopeMode,
+    /// Afterglow time constant in seconds.
+    pub scope_persistence: f32,
+    /// Beam width in pixels at 1440p.
+    pub scope_beam: f32,
+    pub scope_gain: f32,
 
     pub intensity: f32,
     pub bloom_strength: f32,
@@ -81,6 +99,10 @@ impl Default for Settings {
             ascii_density: 0.8,
             ascii_glyphs: 0.85,
             ascii_gradient: 0.9,
+            scope_mode: ScopeMode::Yt,
+            scope_persistence: 0.08,
+            scope_beam: 3.0,
+            scope_gain: 1.0,
             intensity: 1.0,
             bloom_strength: 0.9,
             bloom_threshold: 0.75,

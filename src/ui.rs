@@ -5,7 +5,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Margin, Pos2, Rect, RichText, 
 
 use crate::media::{TrackInfo, ART_SIZE};
 use crate::palette::{Palette, PRESETS};
-use crate::settings::{AsciiShape, Scene, Settings, UiTheme, WindowMode};
+use crate::settings::{AsciiShape, Scene, ScopeMode, Settings, UiTheme, WindowMode};
 use crate::sys::ProcStats;
 use crate::vis::VisState;
 use crate::volume::Volume;
@@ -471,15 +471,32 @@ impl UiState {
             let s = &mut *c.settings;
             match sec {
                 Section::Visuals => {
-                    let w = (ui.available_width() - 6.0) / 2.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        for (sc, name) in [(Scene::Terminal, "1  Faulty Terminal"), (Scene::GradientAscii, "2  Gradient ASCII")] {
-                            if ui.add_sized([w, 30.0], egui::Button::new(name).selected(s.visual == sc)).clicked() {
+                    let w = ui.available_width();
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        for (sc, name) in [
+                            (Scene::Terminal, "1  Faulty Terminal"),
+                            (Scene::GradientAscii, "2  Gradient ASCII"),
+                            (Scene::Scope, "3  Phosphor Scope"),
+                        ] {
+                            if ui.add_sized([w, 28.0], egui::Button::new(name).selected(s.visual == sc)).clicked() {
                                 s.visual = sc;
                             }
                         }
                     });
+                    if s.visual == Scene::Scope {
+                        ui.add_space(2.0);
+                        egui::ComboBox::from_label("Mode")
+                            .selected_text(scope_mode_name(s.scope_mode))
+                            .show_ui(ui, |ui| {
+                                for m in [ScopeMode::Yt, ScopeMode::Polar] {
+                                    ui.selectable_value(&mut s.scope_mode, m, scope_mode_name(m));
+                                }
+                            });
+                        labeled(ui, t, "Persistence", egui::Slider::new(&mut s.scope_persistence, 0.02..=1.5).suffix(" s").logarithmic(true));
+                        labeled(ui, t, "Beam width", egui::Slider::new(&mut s.scope_beam, 1.0..=10.0).suffix(" px"));
+                        labeled(ui, t, "Gain", egui::Slider::new(&mut s.scope_gain, 0.25..=3.0));
+                    }
                     if s.visual == Scene::GradientAscii {
                         ui.add_space(2.0);
                         egui::ComboBox::from_label("Shape")
@@ -585,7 +602,7 @@ impl UiState {
                 Section::Hotkeys => {
                     let rows: [(&str, &[&str]); 9] = [
                         ("Sidebar", &["F1", "Tab"]),
-                        ("Scene", &["1", "2"]),
+                        ("Scene", &["1", "2", "3"]),
                         ("Fullscreen", &["F11", "Alt+Enter"]),
                         ("Overlay mode", &["O"]),
                         ("Show now playing", &["T"]),
@@ -860,5 +877,12 @@ fn spectrum_meter(ui: &mut egui::Ui, vis: &VisState, t: &Tokens, accent: Color32
     if height >= 40.0 {
         let k = vis.kick.clamp(0.0, 1.0);
         p.circle_filled(egui::pos2(rect.max.x - 10.0, rect.min.y + 10.0), 3.0 + 3.0 * k, t.text.gamma_multiply(0.2 + 0.8 * k));
+    }
+}
+
+fn scope_mode_name(m: ScopeMode) -> &'static str {
+    match m {
+        ScopeMode::Yt => "Y-T (sweep)",
+        ScopeMode::Polar => "Polar",
     }
 }

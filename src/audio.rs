@@ -13,7 +13,7 @@ use realfft::num_complex::Complex;
 use realfft::{RealFftPlanner, RealToComplex};
 
 pub const NUM_BANDS: usize = 64;
-pub const WAVE_LEN: usize = 512;
+pub const WAVE_LEN: usize = 2048;
 const FFT_SIZE: usize = 2048;
 const HOP: usize = 256;
 const FLUX_HIST: usize = 160;
@@ -642,7 +642,8 @@ impl Analyzer {
         let start = (self.pos + FFT_SIZE - WAVE_LEN) % FFT_SIZE;
         let mean = (0..WAVE_LEN).map(|i| self.ring[(start + i) % FFT_SIZE]).sum::<f32>() / WAVE_LEN as f32;
         for i in 0..WAVE_LEN {
-            f.wave[i] = ((self.ring[(start + i) % FFT_SIZE] - mean) * gain).clamp(-1.0, 1.0);
+            // Loose clamp only; the scope soft-clips, so peaks round off instead of flattening.
+            f.wave[i] = ((self.ring[(start + i) % FFT_SIZE] - mean) * gain).clamp(-4.0, 4.0);
         }
         f.bass = bass;
         f.mid = mid;

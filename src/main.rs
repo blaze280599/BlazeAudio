@@ -269,6 +269,7 @@ impl App {
             KeyCode::KeyO => self.toggle_mode(WindowMode::Overlay),
             KeyCode::Digit1 => self.settings.visual = Scene::Terminal,
             KeyCode::Digit2 => self.settings.visual = Scene::GradientAscii,
+            KeyCode::Digit3 => self.settings.visual = Scene::Scope,
             KeyCode::ArrowUp | KeyCode::ArrowDown => {
                 self.volume.nudge(if code == KeyCode::ArrowUp { 0.02 } else { -0.02 });
                 self.volume_flash = 1.6;

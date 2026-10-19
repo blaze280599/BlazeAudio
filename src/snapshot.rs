@@ -7,7 +7,7 @@ use std::time::Instant;
 use crate::audio::Offline;
 use crate::gpu::Gpu;
 use crate::palette::{self, PRESETS};
-use crate::settings::{AsciiShape, Scene, Settings};
+use crate::settings::{AsciiShape, Scene, ScopeMode, Settings};
 use crate::vis::VisState;
 
 const SR: f32 = 48_000.0;
@@ -235,6 +235,27 @@ pub fn run(dir: &Path) {
     vis.scene_time = 0.9;
     if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
         save("ascii_intro.png", img);
+    }
+
+    // Phosphor Scope: time it, then one frame per mode (afterglow needs a few frames to build).
+    gpu.scene = Scene::Scope;
+    settings.visual = Scene::Scope;
+    vis.scene_time = 0.0;
+    let t = Instant::now();
+    for _ in 0..150 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    let ms = t.elapsed().as_secs_f32() * 1000.0 / 150.0;
+    report += &format!("render (phosphor scope): {ms:.2} ms/frame (CPU+GPU, 1280x720, unthrottled)\n");
+    for (mode, name) in [(ScopeMode::Yt, "yt"), (ScopeMode::Polar, "polar")] {
+        settings.scope_mode = mode;
+        for _ in 0..20 {
+            step(&mut gpu, &mut vis, &settings, false);
+        }
+        if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+            save(&format!("scope_{name}.png"), img);
+        }
     }
 
     let expected = (time * BPM / 60.0) as u32;
