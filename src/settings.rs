@@ -8,6 +8,14 @@ pub enum WindowMode {
     Overlay,
 }
 
+/// Colour scheme for the app's UI (not the scenes).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum UiTheme {
+    Dark,
+    Oled,
+    Light,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -42,6 +50,7 @@ pub struct Settings {
 
     pub start_mode: WindowMode,
     pub sidebar_expanded: bool,
+    pub theme: UiTheme,
     pub overlay_opacity: f32,
     pub overlay_click_through: bool,
 }
@@ -75,6 +84,7 @@ impl Default for Settings {
             idle_fps: 30,
             start_mode: WindowMode::Windowed,
             sidebar_expanded: true,
+            theme: UiTheme::Dark,
             overlay_opacity: 0.9,
             overlay_click_through: true,
         }
@@ -90,7 +100,8 @@ impl Settings {
     pub fn load() -> Self {
         path()
             .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| serde_json::from_str(&s).ok())
+            // Tolerate a UTF-8 BOM (e.g. after hand-editing with Windows tools).
+            .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok())
             .unwrap_or_default()
     }
 
