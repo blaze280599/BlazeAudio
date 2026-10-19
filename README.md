@@ -15,7 +15,7 @@ Everything ships in one self-contained `blazeaudio.exe` (static CRT, system DLLs
 2. Play music in Spotify, a browser, a game, or anything else. BlazeAudio visualizes everything your default output device plays.
 3. If the app reports what's playing to Windows (Spotify does), BlazeAudio shows the title, artist, and album art, and takes its colors from the cover.
 
-Press `F1` for settings and `←` / `→` to change scenes.
+In a window, settings live in the sidebar on the left. Press `F1` to show or hide it, and `←` / `→` to change scenes.
 
 ## Scenes
 
@@ -53,7 +53,7 @@ To keep it on a second monitor while you game or work, drag the window there and
 
 | Key | Action |
 |-----|--------|
-| `F1` / `Tab` | Settings panel |
+| `F1` / `Tab` | Show / hide the sidebar |
 | `F11` / `F` / `Alt+Enter` / double-click | Borderless fullscreen |
 | `O` | Overlay mode |
 | `→` / `N` / `Space` | Next scene |
@@ -61,16 +61,20 @@ To keep it on a second monitor while you game or work, drag the window there and
 | `1`–`9`, `0`, `-` | Jump to a scene |
 | `T` | Show now-playing card |
 | `F3` | FPS / CPU / RAM / BPM stats |
-| `Esc` | Close settings, then leave fullscreen/overlay, then quit |
+| `Esc` | Close the settings drawer, then the sidebar (fullscreen/overlay), then leave fullscreen/overlay, then quit |
 | `Ctrl+Alt+O` | Toggle overlay (**global**, works while click-through) |
-| `Ctrl+Alt+S` | Toggle settings (**global**, makes the overlay clickable while open) |
+| `Ctrl+Alt+S` | Toggle the sidebar (**global**, makes the overlay clickable while open) |
 | `Ctrl+Alt+N` | Next scene (**global**) |
 
 The three `Ctrl+Alt` shortcuts work even when BlazeAudio isn't focused, which you need in overlay mode because the window can't receive normal key presses there.
 
-## Settings panel
+## Sidebar
 
-`F1` opens a panel showing what's playing, the active audio device, and a live spectrum meter, with these sections:
+In windowed mode a sidebar sits on the left, and the scene renders in the space beside it. It shows what's playing, with a live spectrum meter, plus one entry per settings section. Click a section to open its settings in a drawer next to the sidebar; click it again or press `Esc` to close the drawer. **Collapse** shrinks the sidebar to an icon rail, and the app remembers that choice.
+
+Fullscreen and overlay hide the sidebar so the visuals get the whole screen; press `F1` to bring it back. Moving the mouse over the scene shows a scene switcher at the bottom and fullscreen/overlay buttons in the top-right corner, which fade out after a couple of seconds.
+
+The sections:
 
 - **Scenes**: pick a scene, auto-cycle on/off, cycle time, switch on drops, crossfade length.
 - **Visuals**: intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, particle trails and density, render scale (lower it on slower GPUs).
@@ -153,7 +157,7 @@ src/
   palette.rs    Oklab k-means album palette, presets
   gpu.rs        wgpu renderer: targets, pipelines, fluid sim, bloom, tonemap, egui
   vis.rs        render-side animation state, fluid emitters, scene sequencing
-  ui.rs         egui settings panel, now-playing toast, stats
+  ui.rs         egui sidebar + settings drawer, scene controls, now-playing toast, stats
   settings.rs   settings model and persistence
   sys.rs        global hotkeys, CPU/RAM stats, working-set trim, overlay window fix
   snapshot.rs   headless self-test

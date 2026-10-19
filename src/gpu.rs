@@ -260,6 +260,9 @@ pub struct Gpu {
     pipes: Pipelines,
     targets: Targets,
     trail_dirty: bool,
+    /// Area of the swapchain the scene is drawn into (x, y, w, h in physical pixels); the rest
+    /// belongs to docked UI panels.
+    viewport: [u32; 4],
     pub egui: egui_wgpu::Renderer,
 }
 
@@ -741,6 +744,7 @@ impl Gpu {
             pipes,
             targets,
             trail_dirty: true,
+            viewport: [0, 0, width.max(1), height.max(1)],
             egui,
         };
         // Clear spectrogram + art to black.
@@ -768,7 +772,21 @@ impl Gpu {
         if let Some(s) = &self.surface {
             s.configure(&self.device, &self.config);
         }
+        self.viewport = [0, 0, width, height];
         self.rebuild_targets();
+    }
+
+    /// Restrict the scene to a sub-rectangle of the window (clamped to the surface). Scene
+    /// targets are sized to it, so a docked panel doesn't squash or hide the visuals.
+    pub fn set_viewport(&mut self, x: u32, y: u32, w: u32, h: u32) {
+        let (sw, sh) = (self.config.width, self.config.height);
+        let x = x.min(sw.saturating_sub(16));
+        let y = y.min(sh.saturating_sub(16));
+        let vp = [x, y, w.clamp(16, sw - x), h.clamp(16, sh - y)];
+        if vp != self.viewport {
+            self.viewport = vp;
+            self.rebuild_targets();
+        }
     }
 
     pub fn set_render_scale(&mut self, scale: f32) {
@@ -779,7 +797,7 @@ impl Gpu {
     }
 
     fn rebuild_targets(&mut self) {
-        let (tw, th) = scaled(self.config.width, self.config.height, self.render_scale);
+        let (tw, th) = scaled(self.viewport[2], self.viewport[3], self.render_scale);
         if tw != self.targets.w || th != self.targets.h {
             self.targets = build_targets(&self.device, &self.tex1_layout, &self.tex2_layout, tw, th);
             self.trail_dirty = true;
@@ -929,7 +947,7 @@ impl Gpu {
     }
 
     /// Encode a full frame: scenes -> crossfade -> bloom -> tonemap into `out`.
-    pub fn encode(&mut self, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView, fd: &FrameDesc) {
+    pub fn encode(&mut self, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView, fd: &FrameDesc, overlay: bool) {
         let needs_particles = fd.cur_scene == SCENE_NEBULA || fd.prev_scene == Some(SCENE_NEBULA);
         if needs_particles {
             let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("particles"), timestamp_writes: None });
@@ -972,14 +990,31 @@ impl Gpu {
             Self::fullscreen_pass(enc, &t.bloom[i - 1].view, wgpu::LoadOp::Load, &self.pipes.up, &self.g0, Some(&t.bg_up[i]));
         }
 
-        Self::fullscreen_pass(
-            enc,
-            out,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &self.pipes.tonemap,
-            &self.g0,
-            Some(bg_tonemap),
-        );
+        // Tonemap into the scene viewport. Outside it (behind docked panels) stays transparent
+        // in overlay mode and black otherwise, so a translucent panel never shows the desktop.
+        let clear = if overlay { wgpu::Color::TRANSPARENT } else { wgpu::Color::BLACK };
+        let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("tonemap"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: out,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        let [x, y, w, h] = self.viewport;
+        // Full-surface viewports are left at the default, which also keeps the tiny offscreen
+        // warm-up target in `step_offscreen` valid.
+        if [x, y, w, h] != [0, 0, self.config.width, self.config.height] {
+            pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+        }
+        pass.set_pipeline(&self.pipes.tonemap);
+        pass.set_bind_group(0, &self.g0, &[]);
+        pass.set_bind_group(1, bg_tonemap, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     pub fn encode_egui(
@@ -1040,7 +1075,7 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let mut enc = self.device.create_command_encoder(&Default::default());
-        self.encode(&mut enc, &view, fd);
+        self.encode(&mut enc, &view, fd, false);
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             wgpu::TexelCopyBufferInfo {
@@ -1072,7 +1107,7 @@ impl Gpu {
         let scratch = t.scene[fd.cur_slot ^ 1].tex.create_view(&Default::default());
         let _ = scratch;
         let tmp = make_tex(&self.device, 4, 4, self.view_format, "warm");
-        self.encode(&mut enc, &tmp.view, fd);
+        self.encode(&mut enc, &tmp.view, fd, false);
         self.queue.submit([enc.finish()]);
     }
 }

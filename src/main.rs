@@ -103,7 +103,7 @@ struct App {
 
     mode: WindowMode,
     windowed_rect: Option<(PhysicalPosition<i32>, PhysicalSize<u32>)>,
-    show_settings: bool,
+    show_sidebar: bool,
     modifiers: ModifiersState,
 
     start: Instant,
@@ -130,6 +130,9 @@ struct App {
     last_beat_seen: bool,
     hittest: Option<bool>,
     ignore_audio: bool,
+    /// Scene area in physical pixels (x, y, w, h), i.e. the window minus docked panels.
+    scene_px: [f32; 4],
+    cursor: PhysicalPosition<f64>,
 }
 
 impl App {
@@ -149,7 +152,7 @@ impl App {
             gfx: None,
             ui: ui::UiState::new(),
             windowed_rect: None,
-            show_settings: false,
+            show_sidebar: settings.start_mode == WindowMode::Windowed,
             modifiers: ModifiersState::empty(),
             start: now,
             last_frame: now,
@@ -173,6 +176,8 @@ impl App {
             last_beat_seen: false,
             hittest: None,
             ignore_audio: std::env::var_os("BLAZE_IGNORE_AUDIO").is_some(),
+            scene_px: [0.0, 0.0, f32::MAX, f32::MAX],
+            cursor: PhysicalPosition::new(0.0, 0.0),
             settings,
         }
     }
@@ -187,12 +192,13 @@ impl App {
         self.settings.scene = self.scenes.cur;
     }
 
-    fn set_settings_visible(&mut self, v: bool) {
-        if self.show_settings && !v {
+    fn set_sidebar_visible(&mut self, v: bool) {
+        if self.show_sidebar && !v {
+            self.ui.drawer = None;
             self.settings.save();
             self.trim_at = Some(Instant::now() + Duration::from_secs(2));
         }
-        self.show_settings = v;
+        self.show_sidebar = v;
         self.update_hittest();
         if v {
             if let Some(g) = &self.gfx {
@@ -205,7 +211,7 @@ impl App {
 
     fn update_hittest(&mut self) {
         if let Some(g) = &self.gfx {
-            let interactive = self.mode != WindowMode::Overlay || self.show_settings || !self.settings.overlay_click_through;
+            let interactive = self.mode != WindowMode::Overlay || self.show_sidebar || !self.settings.overlay_click_through;
             if self.hittest != Some(interactive) {
                 self.hittest = Some(interactive);
                 let _ = g.window.set_cursor_hittest(interactive);
@@ -248,6 +254,8 @@ impl App {
             }
         }
         self.mode = mode;
+        // The sidebar is part of the windowed app; fullscreen and overlay are for the visuals.
+        self.set_sidebar_visible(mode == WindowMode::Windowed);
         #[cfg(debug_assertions)]
         eprintln!("[win] mode={mode:?} size={:?} pos={:?}", w.inner_size(), w.outer_position());
         w.set_cursor_visible(true);
@@ -264,7 +272,7 @@ impl App {
     fn handle_key(&mut self, el: &ActiveEventLoop, code: KeyCode) {
         let alt = self.modifiers.alt_key();
         match code {
-            KeyCode::F1 | KeyCode::Tab => self.set_settings_visible(!self.show_settings),
+            KeyCode::F1 | KeyCode::Tab => self.set_sidebar_visible(!self.show_sidebar),
             KeyCode::F11 | KeyCode::KeyF => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::Enter if alt => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::KeyO => self.toggle_mode(WindowMode::Overlay),
@@ -284,8 +292,11 @@ impl App {
             KeyCode::KeyT => self.toast_t = 6.0,
             KeyCode::F3 => self.settings.show_stats = !self.settings.show_stats,
             KeyCode::Escape => {
-                if self.show_settings {
-                    self.set_settings_visible(false);
+                if self.ui.drawer.is_some() {
+                    self.ui.drawer = None;
+                    self.settings.save();
+                } else if self.show_sidebar && self.mode != WindowMode::Windowed {
+                    self.set_sidebar_visible(false);
                 } else if self.mode != WindowMode::Windowed {
                     self.apply_mode(WindowMode::Windowed);
                 } else {
@@ -300,7 +311,7 @@ impl App {
     fn poll_global_hotkeys(&mut self) {
         match self.hotkeys.poll() {
             Some(sys::GlobalKey::ToggleOverlay) => self.toggle_mode(WindowMode::Overlay),
-            Some(sys::GlobalKey::ToggleSettings) => self.set_settings_visible(!self.show_settings),
+            Some(sys::GlobalKey::ToggleSettings) => self.set_sidebar_visible(!self.show_sidebar),
             Some(sys::GlobalKey::NextScene) => self.switch_scene(self.scenes.cur + 1),
             None => {}
         }
@@ -376,6 +387,55 @@ impl App {
             g = self.gfx.take().unwrap();
         }
 
+        // UI runs first: the docked sidebar decides how much of the window the scene gets.
+        // egui only runs when something is on screen, so idle frames cost no UI work.
+        let toast_alpha = (self.toast_t / 0.6).min(1.0).min((6.0 - self.toast_t) / 0.4).clamp(0.0, 1.0);
+        let still = self.last_mouse_move.elapsed().as_secs_f32();
+        let pointer_ok = self.mode != WindowMode::Overlay || self.show_sidebar;
+        let controls_alpha = if pointer_ok { (1.0 - (still - 2.0) / 0.5).clamp(0.0, 1.0) } else { 0.0 };
+        let need_ui = self.show_sidebar || (self.toast_t > 0.0 && self.settings.show_track_toast) || self.settings.show_stats || controls_alpha > 0.0;
+        let drawer_was_open = self.ui.drawer.is_some();
+        let mut actions = Vec::new();
+        let mut egui_out = None;
+        let (sw, sh) = (g.gpu.config.width as f32, g.gpu.config.height as f32);
+        self.scene_px = [0.0, 0.0, sw, sh];
+        if need_ui {
+            let raw = g.egui_state.take_egui_input(&g.window);
+            let device_name = self.audio.device_name();
+            let palette = self.vis.pal_target;
+            let mut scene_rect = egui::Rect::NOTHING;
+            let out = g.egui_ctx.run(raw, |ctx| {
+                (actions, scene_rect) = self.ui.draw(
+                    ctx,
+                    ui::UiCtx {
+                        settings: &mut self.settings,
+                        track: &self.track,
+                        vis: &self.vis,
+                        palette,
+                        scene: self.scenes.cur,
+                        mode: self.mode,
+                        stats: &self.stats,
+                        fps: self.fps,
+                        frame_ms: self.frame_ms,
+                        idle: self.idle,
+                        device: &device_name,
+                        adapter: &g.gpu.adapter_name,
+                        transparent_ok: g.gpu.transparent_ok,
+                        show_sidebar: self.show_sidebar,
+                        toast_alpha,
+                        controls_alpha,
+                    },
+                );
+            });
+            let ppp = out.pixels_per_point;
+            let x = (scene_rect.min.x * ppp).round().clamp(0.0, sw);
+            let y = (scene_rect.min.y * ppp).round().clamp(0.0, sh);
+            self.scene_px = [x, y, (scene_rect.max.x * ppp).round().min(sw) - x, (scene_rect.max.y * ppp).round().min(sh) - y];
+            egui_out = Some(out);
+        }
+        let [vx, vy, vw, vh] = self.scene_px;
+        g.gpu.set_viewport(vx as u32, vy as u32, vw.max(0.0) as u32, vh.max(0.0) as u32);
+
         g.gpu.set_render_scale(self.settings.render_scale);
         let particle_count = (MAX_PARTICLES as f32 * self.settings.particle_fraction) as u32;
         let overlay = self.mode == WindowMode::Overlay && g.gpu.transparent_ok;
@@ -423,38 +483,9 @@ impl App {
             prev_scene: self.scenes.prev,
             particle_count,
         };
-        g.gpu.encode(&mut enc, &view, &fd);
+        g.gpu.encode(&mut enc, &view, &fd, overlay);
 
-        // egui only runs when something is on screen, so idle frames cost no UI work.
-        let toast_alpha = (self.toast_t / 0.6).min(1.0).min((6.0 - self.toast_t) / 0.4).clamp(0.0, 1.0);
-        let need_ui = self.show_settings || (self.toast_t > 0.0 && self.settings.show_track_toast) || self.settings.show_stats;
-        let mut actions = Vec::new();
-        if need_ui {
-            let raw = g.egui_state.take_egui_input(&g.window);
-            let device_name = self.audio.device_name();
-            let palette = self.vis.pal_target;
-            let out = g.egui_ctx.run(raw, |ctx| {
-                actions = self.ui.draw(
-                    ctx,
-                    ui::UiCtx {
-                        settings: &mut self.settings,
-                        track: &self.track,
-                        vis: &self.vis,
-                        palette,
-                        scene: self.scenes.cur,
-                        mode: self.mode,
-                        stats: &self.stats,
-                        fps: self.fps,
-                        frame_ms: self.frame_ms,
-                        idle: self.idle,
-                        device: &device_name,
-                        adapter: &g.gpu.adapter_name,
-                        transparent_ok: g.gpu.transparent_ok,
-                        show_settings: self.show_settings,
-                        toast_alpha,
-                    },
-                );
-            });
+        if let Some(out) = egui_out {
             g.egui_state.handle_platform_output(&g.window, out.platform_output);
             let prims = g.egui_ctx.tessellate(out.shapes, out.pixels_per_point);
             let screen = egui_wgpu::ScreenDescriptor {
@@ -467,12 +498,16 @@ impl App {
         g.window.pre_present_notify();
         surface_tex.present();
         self.frame_ms += (now.elapsed().as_secs_f32() * 1000.0 - self.frame_ms) * 0.05;
-        if self.show_settings {
+        let drawer_open = self.ui.drawer.is_some();
+        if drawer_open {
             self.audio.set_params(audio_params(&self.settings));
+        } else if drawer_was_open {
+            self.settings.save();
+            self.trim_at = Some(Instant::now() + Duration::from_secs(2));
         }
 
         // Fullscreen: hide an idle cursor.
-        if self.mode == WindowMode::Fullscreen && !self.show_settings && !self.cursor_hidden && self.last_mouse_move.elapsed() > Duration::from_millis(2500) {
+        if self.mode == WindowMode::Fullscreen && !self.show_sidebar && !self.cursor_hidden && self.last_mouse_move.elapsed() > Duration::from_millis(2500) {
             g.window.set_cursor_visible(false);
             self.cursor_hidden = true;
         }
@@ -482,12 +517,12 @@ impl App {
             match a {
                 ui::UiAction::SetMode(m) => self.apply_mode(m),
                 ui::UiAction::Scene(s) => self.switch_scene(s),
-                ui::UiAction::CloseSettings => self.set_settings_visible(false),
+                ui::UiAction::HideSidebar => self.set_sidebar_visible(false),
             }
         }
         self.update_hittest();
 
-        self.idle = !self.show_settings && self.toast_t <= 0.0 && self.vis.silent_for > 3.0 && self.scenes.prev.is_none();
+        self.idle = !drawer_open && controls_alpha <= 0.0 && self.toast_t <= 0.0 && self.vis.silent_for > 3.0 && self.scenes.prev.is_none();
         self.stats.update();
         if self.trim_at.is_some_and(|t| Instant::now() >= t) {
             self.trim_at = None;
@@ -584,7 +619,7 @@ impl ApplicationHandler for App {
         if let Some(g) = &mut self.gfx {
             if !matches!(event, WindowEvent::RedrawRequested) {
                 let r = g.egui_state.on_window_event(&g.window, &event);
-                consumed = r.consumed && self.show_settings;
+                consumed = r.consumed && self.show_sidebar;
             }
         }
         match event {
@@ -618,7 +653,8 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            WindowEvent::CursorMoved { .. } => {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = position;
                 self.last_mouse_move = Instant::now();
                 if self.cursor_hidden {
                     if let Some(g) = &self.gfx {
@@ -629,7 +665,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
                 let over_ui = self.gfx.as_ref().is_some_and(|g| g.egui_ctx.is_pointer_over_area());
-                if !over_ui && !consumed {
+                let [x, y, w, h] = self.scene_px;
+                let (cx, cy) = (self.cursor.x as f32, self.cursor.y as f32);
+                let in_scene = cx >= x && cx < x + w && cy >= y && cy < y + h;
+                if in_scene && !over_ui && !consumed {
                     if self.last_click.elapsed() < Duration::from_millis(350) {
                         self.toggle_mode(WindowMode::Fullscreen);
                         self.last_click = Instant::now() - Duration::from_secs(5);

@@ -41,6 +41,7 @@ pub struct Settings {
     pub idle_fps: u32,
 
     pub start_mode: WindowMode,
+    pub sidebar_expanded: bool,
     pub overlay_opacity: f32,
     pub overlay_click_through: bool,
 }
@@ -73,6 +74,7 @@ impl Default for Settings {
             show_stats: false,
             idle_fps: 30,
             start_mode: WindowMode::Windowed,
+            sidebar_expanded: true,
             overlay_opacity: 0.9,
             overlay_click_through: true,
         }
