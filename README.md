@@ -2,7 +2,20 @@
 
 An HDR music visualizer for Windows. It captures whatever your PC is playing through WASAPI loopback, reads now-playing info and album art from Spotify (or any media app) through Windows' media session API, and renders eleven audio-reactive scenes with DirectX 12.
 
-Everything ships in one self-contained `blazeaudio.exe` (static CRT, system DLLs only).
+Everything ships in one self-contained `blazeaudio.exe` (static CRT, system DLLs only). There's nothing to install.
+
+## Requirements
+
+- Windows 10 or 11
+- A DirectX 12 capable GPU
+
+## Getting started
+
+1. Run `blazeaudio.exe`.
+2. Play music in Spotify, a browser, a game, or anything else. BlazeAudio visualizes everything your default output device plays.
+3. If the app reports what's playing to Windows (Spotify does), BlazeAudio shows the title, artist, and album art, and takes its colors from the cover.
+
+Press `F1` for settings and `←` / `→` to change scenes.
 
 ## Scenes
 
@@ -20,24 +33,54 @@ Everything ships in one self-contained `blazeaudio.exe` (static CRT, system DLLs
 | `0` | **Dither** | Domain-warped noise waves, Bayer-dithered into four palette shades, with beat rings |
 | `-` | **Faulty Terminal** | Flickering glyph CRT whose columns form a spectrum analyzer, with row-tearing glitches on beats |
 
-Scenes crossfade with a noisy radial dissolve. Auto-cycle switches scenes on the beat, and a big drop can also trigger a switch.
+Scenes crossfade with a noisy radial dissolve. Auto-cycle (every 40 s by default) switches scenes on a beat, and a big drop can also trigger a switch.
+
+## Album-art colors
+
+When the track changes, BlazeAudio extracts the main colors from the cover and fades every scene to them over about a second. A now-playing card with the cover, title, and artist appears for a few seconds; press `T` to show it again.
+
+With nothing playing, or with album colors turned off, it uses one of five built-in palettes: Neon Synth, Ember, Aurora, Glacier, or Acid.
+
+## Window modes
+
+- **Windowed**: a normal resizable window (the default).
+- **Fullscreen**: borderless fullscreen on the monitor the window is on. The cursor hides after 2.5 s without movement.
+- **Overlay**: covers the monitor with a transparent background, so only the glowing parts show over your desktop and apps. It stays on top and clicks pass through to whatever is underneath.
+
+To keep it on a second monitor while you game or work, drag the window there and press `F11`, or use **Window → Start in** in settings to choose the startup mode.
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
-| `F1` / `Tab` | Settings overlay |
-| `F11` / `Alt+Enter` / double-click | Borderless fullscreen |
-| `O` | Overlay mode (transparent, always-on-top, click-through) |
-| `←` `→` / `1`–`9`, `0`, `-` / `Space` | Change scene |
+| `F1` / `Tab` | Settings panel |
+| `F11` / `F` / `Alt+Enter` / double-click | Borderless fullscreen |
+| `O` | Overlay mode |
+| `→` / `N` / `Space` | Next scene |
+| `←` / `P` | Previous scene |
+| `1`–`9`, `0`, `-` | Jump to a scene |
 | `T` | Show now-playing card |
 | `F3` | FPS / CPU / RAM / BPM stats |
-| `Esc` | Close settings → leave fullscreen/overlay → quit |
+| `Esc` | Close settings, then leave fullscreen/overlay, then quit |
 | `Ctrl+Alt+O` | Toggle overlay (**global**, works while click-through) |
 | `Ctrl+Alt+S` | Toggle settings (**global**, makes the overlay clickable while open) |
 | `Ctrl+Alt+N` | Next scene (**global**) |
 
-Settings are saved to `%APPDATA%\BlazeAudio\settings.json`.
+The three `Ctrl+Alt` shortcuts work even when BlazeAudio isn't focused, which you need in overlay mode because the window can't receive normal key presses there.
+
+## Settings panel
+
+`F1` opens a panel showing what's playing, the active audio device, and a live spectrum meter, with these sections:
+
+- **Scenes**: pick a scene, auto-cycle on/off, cycle time, switch on drops, crossfade length.
+- **Visuals**: intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, particle trails and density, render scale (lower it on slower GPUs).
+- **Audio**: sensitivity, attack (how fast bars rise), decay (how fast they fall), beat sensitivity.
+- **Palette**: album-art colors on/off, fallback palette, swatches of the current colors.
+- **Window**: mode, overlay opacity, overlay click-through, startup mode, idle frame-rate cap, now-playing card, performance stats.
+- **Hotkeys**: the full key list.
+- **Reset to defaults**.
+
+Settings are saved to `%APPDATA%\BlazeAudio\settings.json` when you close the panel or quit.
 
 ## How it works
 
@@ -51,12 +94,17 @@ Settings are saved to `%APPDATA%\BlazeAudio\settings.json`.
 - **Metadata**: `GlobalSystemMediaTransportControlsSessionManager` (prefers a Spotify session). The cover thumbnail is decoded, then a palette comes from k-means in Oklab, scored for vividness and hue diversity. The Spotify Web API is not used.
 - **Rendering** (wgpu → DX12):
   - Each scene draws into an Rgba16Float target, with two ping-pong slots for crossfades.
+  - Scenes are driven by smoothed bands, kick/hat envelopes, beat shockwaves, a 4-second spectrogram texture, the tracked tempo (beat phase), and a "flow" clock that idles slowly and surges with the music.
+  - Nebula updates its particles in a compute shader. Liquid Ether runs a stable-fluids simulation on a 200-row grid each frame (advection, vorticity confinement, 24 Jacobi pressure iterations, projection).
+  - The compositor clamps NaN and infinite values out of every scene, so a single bad pixel can't be smeared across the frame by bloom.
   - Bloom is Jimenez's 13-tap downsample with a Karis average and soft-knee threshold, plus a tent upsample over 6 mips.
   - Final output is fitted ACES, chromatic aberration on kicks, vignette, and film grain/dither applied in display space.
 - **Overlay transparency** uses a DirectComposition swapchain (`DxgiFromVisual`) with premultiplied alpha.
 - **Idle**: after 3 s of silence (and when nothing on screen needs it) the frame rate drops to the idle cap (default 30 fps), egui stops running, and nothing renders while the window is minimized or occluded.
 
 ## Performance (RTX 5070 Ti, 2560×1440 @ 170 Hz, release build)
+
+CPU and memory, measured on the Halo scene:
 
 | State | CPU (whole machine, 16 threads) | Working set | Private working set |
 |-------|------|------|------|
@@ -83,7 +131,12 @@ The output is `target\release\blazeaudio.exe`. `.cargo/config.toml` enables `+cr
 target/release/blazeaudio.exe --snapshot out
 ```
 
-This synthesizes a 124 BPM track, runs it through the real analyzer, renders every scene and a crossfade offscreen to PNGs, and writes `report.txt` with timings, detected beats and their phase, and the BPM estimate.
+This runs headless: no window opens. It synthesizes a 124 BPM track, runs it through the real analyzer, and renders every scene (on a beat and between beats) plus a crossfade offscreen to PNGs. It also writes:
+
+- `report.txt`: init time, per-scene frame time, detected beats with their phase, and the BPM estimate
+- `onset_trace.csv`: the onset and threshold curve from the audio-only check
+
+The output folder defaults to `snapshots` if you leave it off.
 
 ### Diagnostics
 
@@ -98,10 +151,15 @@ src/
   audio.rs      WASAPI loopback, FFT, bands, flux beats, tempo
   media.rs      GSMTC now-playing + album art
   palette.rs    Oklab k-means album palette, presets
-  gpu.rs        wgpu renderer: targets, pipelines, bloom, tonemap, egui
-  vis.rs        render-side animation state, scene sequencing
+  gpu.rs        wgpu renderer: targets, pipelines, fluid sim, bloom, tonemap, egui
+  vis.rs        render-side animation state, fluid emitters, scene sequencing
   ui.rs         egui settings panel, now-playing toast, stats
-  sys.rs        global hotkeys, CPU/RAM stats, working-set trim
+  settings.rs   settings model and persistence
+  sys.rs        global hotkeys, CPU/RAM stats, working-set trim, overlay window fix
   snapshot.rs   headless self-test
   shaders/      one WGSL file per scene, plus common and post
 ```
+
+## Credits
+
+Silk, Plasma, Molten Metal, Ferrofluid, Liquid Ether, Light Tunnel, Scanner, Dither and Faulty Terminal are inspired by the [React Bits](https://reactbits.dev) backgrounds of the same names. The shaders here are written from scratch for wgpu/WGSL and driven by audio instead of the cursor.
