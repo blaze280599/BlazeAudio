@@ -1,0 +1,4 @@
+# Statically link the MSVC C runtime so the release build is a single
+# self-contained .exe with no VC++ redistributable dependency.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

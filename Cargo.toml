@@ -1,0 +1,48 @@
+[package]
+name = "blazeaudio"
+version = "1.0.0"
+edition = "2021"
+description = "HDR music visualizer for Windows (WASAPI loopback + DX12)"
+license = "MIT"
+publish = false
+
+[dependencies]
+wgpu = { version = "27", default-features = false, features = ["std", "dx12", "wgsl", "parking_lot"] }
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+egui = { version = "0.33", default-features = false, features = ["default_fonts"] }
+egui-wgpu = { version = "0.33", default-features = false }
+egui-winit = { version = "0.33", default-features = false }
+cpal = "0.18"
+realfft = "3.5"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Control",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+
+# Keep heavy math crates fast even in debug builds so dev runs are representative.
+[profile.dev.package."*"]
+opt-level = 2
