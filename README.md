@@ -33,7 +33,7 @@ Press `1` / `2` / `3` or use the buttons at the top of **Visuals** to switch sce
 
 ## Volume
 
-Moving the mouse over the visualizer brings up a volume bar at the bottom centre, next to the fullscreen/overlay buttons. It sets the Windows output volume of the default device (the same level as the taskbar volume control) and follows changes made anywhere else. Drag or click the bars, or scroll over them; the bars around the handle rise in a wake as it moves. The speaker button mutes. `Up` / `Down` and `M` work without the mouse and flash the bar up for a moment. Turn it off in **Window**.
+Moving the mouse over the visualizer brings up a volume bar at the bottom centre, next to the fullscreen/overlay buttons. It sets the Windows output volume of the default device (the same level as the taskbar volume control) and follows changes made anywhere else. Drag or click the bars (or the round handle), or scroll over them; the bars around the handle rise in a wake as it moves, and the percentage sits on the right. The speaker button mutes. `Up` / `Down` and `M` work without the mouse and flash the bar up for a moment. Turn it off in **General**.
 
 ## Album-art colors
 
@@ -47,7 +47,7 @@ With nothing playing, or with album colors turned off, it uses one of five built
 - **Fullscreen**: borderless fullscreen on the monitor the window is on. The cursor hides after 2.5 s without movement.
 - **Overlay**: covers the monitor with a transparent background, so only the glowing parts show over your desktop and apps. It stays on top and clicks pass through to whatever is underneath.
 
-To keep it on a second monitor while you game or work, drag the window there and press `F11`, or use **Window → Start in** in settings to choose the startup mode.
+To keep it on a second monitor while you game or work, drag the window there and press `F11`, or use **General → Start in** in settings to choose the startup mode.
 
 ## Controls
 
@@ -71,17 +71,17 @@ The two `Ctrl+Alt` shortcuts work even when BlazeAudio isn't focused, which you 
 
 In windowed mode a sidebar sits on the left, and the visualizer renders in the space beside it. It shows what's playing, with a live spectrum meter, plus one entry per settings section. Click a section to open its settings in a drawer next to the sidebar; click it again or press `Esc` to close the drawer. **Collapse** shrinks the sidebar to an icon rail, and the app remembers that choice.
 
-Fullscreen and overlay hide the sidebar so the visuals get the whole screen; press `F1` to bring it back. Moving the mouse over the visualizer shows fullscreen/overlay buttons in the top-right corner, which fade out after a couple of seconds.
+Fullscreen and overlay hide the sidebar so the visuals get the whole screen; press `F1` to bring it back. There it also has a **Hide sidebar** entry above **Collapse**. Moving the mouse over the visualizer shows fullscreen/overlay buttons in the top-right corner, which fade out after a couple of seconds.
+
+Each slider shows its value with fixed precision; 0–1 values (density, opacities, vignette, render scale, overlay opacity) are shown as percentages. You can type a value into the box. When a setting differs from its default, its label brightens and a reset button appears beside it. Double-click the label or the slider to reset it as well. Hover a label to see the default.
 
 The sections:
 
-- **Visuals**: scene, Gradient ASCII shape, cell size, density, glyph and gradient opacity, Phosphor Scope mode, persistence, beam width and gain, intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs). **Randomize** rolls a new look (shapes, modes and effect sliders, kept within watchable ranges) and **Reset** puts the visual settings back to defaults; both leave the current scene and render scale alone.
+- **Visuals**: scene, Gradient ASCII shape, cell size, density, glyph and gradient opacity, Phosphor Scope mode, persistence, beam width and gain, intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs). **Randomize**, **Undo** and **Reset** stay pinned at the bottom of the drawer. Randomize rolls a new look (shapes, modes and effect sliders, kept within watchable ranges), Reset puts the visual settings back to defaults, and Undo steps back through the looks before each Randomize or Reset. All three leave the current scene and render scale alone.
 - **Audio**: sensitivity, attack (how fast bars rise), decay (how fast they fall), beat sensitivity.
-- **Palette**: album-art colors on/off, fallback palette, swatches of the current colors.
-- **Window**: mode, overlay opacity, overlay click-through, startup mode, idle frame-rate cap, now-playing card, volume bar, performance stats.
-- **Theme**: Dark, OLED black, or Light for the sidebar and controls.
+- **Palette**: album-art colors on/off, the fallback palette (each preset listed with its colors; it can only be picked while it's in use, i.e. with album colors off, nothing playing, or a cover with no colors), swatches of the current colors.
+- **General**: window mode and startup mode; overlay opacity and click-through (grouped, and only adjustable in overlay mode); theme (Dark, OLED black, or Light for the sidebar and controls); now-playing card, volume bar, performance stats; idle frame-rate cap. **Reset all settings** asks for confirmation first and keeps the theme, startup mode and sidebar size.
 - **Hotkeys**: the full key list.
-- **Reset to defaults**.
 
 Settings are saved to `%APPDATA%\BlazeAudio\settings.json` when you close the panel or quit.
 

@@ -25,19 +25,21 @@ pub enum Section {
     Visuals,
     Audio,
     Palette,
-    Window,
-    Theme,
+    /// Window modes, overlay, theme and the on-scene extras.
+    General,
     Hotkeys,
 }
 
-const SECTIONS: [(Section, &str, Icon); 6] = [
+const SECTIONS: [(Section, &str, Icon); 5] = [
     (Section::Visuals, "Visuals", Icon::Visuals),
     (Section::Audio, "Audio", Icon::Audio),
     (Section::Palette, "Palette", Icon::Palette),
-    (Section::Window, "Window", Icon::Window),
-    (Section::Theme, "Theme", Icon::Theme),
+    (Section::General, "General", Icon::General),
     (Section::Hotkeys, "Hotkeys", Icon::Keys),
 ];
+
+/// Looks to go back to with Undo (taken before each Randomize or Reset).
+const UNDO_DEPTH: usize = 32;
 
 /// Neutral colour tokens for one UI theme. Album colours only appear in data (spectrum, swatches).
 #[derive(Clone, Copy)]
@@ -114,6 +116,9 @@ pub struct UiState {
     volume_slider: WakeSlider,
     /// The pointer is on the volume bar (or dragging it), so it shouldn't fade out.
     pub volume_hot: bool,
+    look_undo: Vec<Settings>,
+    /// "Reset all settings" was clicked and is waiting for a confirm.
+    confirm_reset: bool,
 }
 
 pub struct UiCtx<'a> {
@@ -145,7 +150,15 @@ fn to_c32(c: [f32; 3], a: u8) -> Color32 {
 
 impl UiState {
     pub fn new() -> Self {
-        Self { art: None, styled: None, drawer: None, volume_slider: WakeSlider::default(), volume_hot: false }
+        Self {
+            art: None,
+            styled: None,
+            drawer: None,
+            volume_slider: WakeSlider::default(),
+            volume_hot: false,
+            look_undo: Vec::new(),
+            confirm_reset: false,
+        }
     }
 
     pub fn set_art(&mut self, ctx: &egui::Context, rgba: Option<&[u8]>) {
@@ -209,6 +222,9 @@ impl UiState {
     /// Draws the UI and returns the actions taken plus the rect (in points) left for the scene.
     pub fn draw(&mut self, ctx: &egui::Context, mut c: UiCtx) -> (Vec<UiAction>, Rect) {
         self.style(ctx, c.settings.theme);
+        if self.drawer != Some(Section::General) {
+            self.confirm_reset = false;
+        }
         let t = tokens(c.settings.theme);
         // Things floating over the scene sit on dark visuals, so they stay dark in the light theme.
         let ft = tokens(if c.settings.theme == UiTheme::Light { UiTheme::Dark } else { c.settings.theme });
@@ -330,6 +346,7 @@ impl UiState {
             fill: if muted { t.faint } else { t.text },
             track: t.control,
             crest: Some(accent),
+            handle: Some(if muted { t.faint } else { t.text }),
             // The bar is short, so a relaxed drag should already raise most of the wake: full
             // height at ~130 %/s (crossing the track in under a second) instead of 320 %/s.
             sensitivity: 2.5,
@@ -360,8 +377,8 @@ impl UiState {
                                 vol.set_level(v / 100.0);
                             }
                             let shown = changed.unwrap_or(level);
-                            let text = RichText::new(format!("{shown:>3.0}")).monospace().color(if muted { t.faint } else { t.dim });
-                            ui.add_sized([28.0, 30.0], egui::Label::new(text));
+                            let text = RichText::new(format!("{shown:>3.0}%")).monospace().color(if muted { t.faint } else { t.dim });
+                            ui.add_sized([36.0, 30.0], egui::Label::new(text));
                             r.dragged()
                         })
                         .inner
@@ -397,7 +414,7 @@ impl UiState {
             if nav_item(ui, t, icon, label, false, expanded).clicked() {
                 c.settings.sidebar_expanded = !expanded;
             }
-            if c.mode != WindowMode::Windowed && nav_item(ui, t, Icon::Close, "Hide sidebar", false, expanded).on_hover_text("F1").clicked() {
+            if c.mode != WindowMode::Windowed && nav_item(ui, t, Icon::HideSidebar, "Hide sidebar", false, expanded).on_hover_text("F1").clicked() {
                 actions.push(UiAction::HideSidebar);
             }
             ui.add_space(6.0);
@@ -472,8 +489,58 @@ impl UiState {
 
         // A solid scroll bar takes its own space instead of floating over the value boxes.
         ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        if sec == Section::Visuals {
+            // Laid out from the bottom first, so Randomize / Undo / Reset stay in view however
+            // long the scene's settings get.
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                self.visuals_footer(ui, c.settings);
+                ui.separator();
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| self.drawer_body(ui, sec, c, t, accent, actions));
+            });
+        } else {
+            self.drawer_body(ui, sec, c, t, accent, actions);
+        }
+    }
+
+    fn visuals_footer(&mut self, ui: &mut egui::Ui, s: &mut Settings) {
+        let w = (ui.available_width() - 12.0) / 3.0;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let randomize = ui
+                .add_sized([w, 28.0], egui::Button::new("Randomize"))
+                .on_hover_text("Random shape, mode and effect settings for every scene")
+                .clicked();
+            let undo = ui
+                .add_enabled_ui(!self.look_undo.is_empty(), |ui| ui.add_sized([w, 28.0], egui::Button::new("Undo")))
+                .inner
+                .on_hover_text("Back to the look before the last Randomize or Reset")
+                .clicked();
+            let reset = ui
+                .add_sized([w, 28.0], egui::Button::new("Reset"))
+                .on_hover_text("Visual settings back to defaults (keeps the scene and render scale)")
+                .clicked();
+            if randomize || reset {
+                if self.look_undo.len() == UNDO_DEPTH {
+                    self.look_undo.remove(0);
+                }
+                self.look_undo.push(s.clone());
+                if randomize {
+                    s.randomize_visuals();
+                } else {
+                    s.reset_visuals();
+                }
+            } else if undo {
+                if let Some(prev) = self.look_undo.pop() {
+                    s.copy_look(&prev);
+                }
+            }
+        });
+    }
+
+    fn drawer_body(&mut self, ui: &mut egui::Ui, sec: Section, c: &mut UiCtx, t: &Tokens, accent: Color32, actions: &mut Vec<UiAction>) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             let s = &mut *c.settings;
+            let d = Settings::default();
             match sec {
                 Section::Visuals => {
                     let w = ui.available_width();
@@ -491,81 +558,61 @@ impl UiState {
                     });
                     if s.visual == Scene::Scope {
                         ui.add_space(2.0);
-                        egui::ComboBox::from_label("Mode")
-                            .selected_text(scope_mode_name(s.scope_mode))
-                            .show_ui(ui, |ui| {
-                                for m in [ScopeMode::Yt, ScopeMode::Polar] {
-                                    ui.selectable_value(&mut s.scope_mode, m, scope_mode_name(m));
-                                }
-                            });
-                        labeled(ui, t, "Persistence", egui::Slider::new(&mut s.scope_persistence, 0.02..=1.5).suffix(" s").logarithmic(true));
-                        labeled(ui, t, "Beam width", egui::Slider::new(&mut s.scope_beam, 1.0..=10.0).suffix(" px"));
-                        labeled(ui, t, "Gain", egui::Slider::new(&mut s.scope_gain, 0.25..=3.0));
+                        choice(ui, t, "Mode", &mut s.scope_mode, d.scope_mode, &[(ScopeMode::Yt, "Y-T sweep"), (ScopeMode::Polar, "Polar")]);
+                        knob(ui, t, "Persistence", &mut s.scope_persistence, d.scope_persistence, 0.02..=1.5, num(2, " s").log());
+                        knob(ui, t, "Beam width", &mut s.scope_beam, d.scope_beam, 1.0..=10.0, num(1, " px"));
+                        knob(ui, t, "Gain", &mut s.scope_gain, d.scope_gain, 0.25..=3.0, num(2, "×"));
                     }
                     if s.visual == Scene::GradientAscii {
                         ui.add_space(2.0);
-                        egui::ComboBox::from_label("Shape")
-                            .selected_text(format!("{:?}", s.ascii_shape))
-                            .show_ui(ui, |ui| {
-                                for sh in [AsciiShape::Horizon, AsciiShape::Pinch, AsciiShape::Rise, AsciiShape::Eclipse] {
-                                    ui.selectable_value(&mut s.ascii_shape, sh, format!("{sh:?}"));
-                                }
-                            });
-                        labeled(ui, t, "Cell size", egui::Slider::new(&mut s.ascii_cell, 8.0..=48.0).suffix(" px"));
-                        labeled(ui, t, "Density", egui::Slider::new(&mut s.ascii_density, 0.0..=1.0));
-                        labeled(ui, t, "Glyph opacity", egui::Slider::new(&mut s.ascii_glyphs, 0.0..=1.0));
-                        labeled(ui, t, "Gradient opacity", egui::Slider::new(&mut s.ascii_gradient, 0.0..=1.0));
+                        let shapes = [(AsciiShape::Horizon, "Horizon"), (AsciiShape::Pinch, "Pinch"), (AsciiShape::Rise, "Rise"), (AsciiShape::Eclipse, "Eclipse")];
+                        choice(ui, t, "Shape", &mut s.ascii_shape, d.ascii_shape, &shapes);
+                        knob(ui, t, "Cell size", &mut s.ascii_cell, d.ascii_cell, 8.0..=48.0, num(0, " px"));
+                        knob(ui, t, "Density", &mut s.ascii_density, d.ascii_density, 0.0..=1.0, PCT);
+                        knob(ui, t, "Glyph opacity", &mut s.ascii_glyphs, d.ascii_glyphs, 0.0..=1.0, PCT);
+                        knob(ui, t, "Gradient opacity", &mut s.ascii_gradient, d.ascii_gradient, 0.0..=1.0, PCT);
                     }
                     ui.separator();
-                    labeled(ui, t, "Intensity", egui::Slider::new(&mut s.intensity, 0.2..=2.0));
-                    labeled(ui, t, "Bloom", egui::Slider::new(&mut s.bloom_strength, 0.0..=3.0));
-                    labeled(ui, t, "Bloom threshold", egui::Slider::new(&mut s.bloom_threshold, 0.0..=3.0));
-                    labeled(ui, t, "Exposure", egui::Slider::new(&mut s.exposure, 0.3..=3.0));
-                    labeled(ui, t, "Chromatic", egui::Slider::new(&mut s.chromatic, 0.0..=2.0));
-                    labeled(ui, t, "Film grain", egui::Slider::new(&mut s.grain, 0.0..=1.5));
-                    labeled(ui, t, "Vignette", egui::Slider::new(&mut s.vignette, 0.0..=1.0));
-                    labeled(ui, t, "Render scale", egui::Slider::new(&mut s.render_scale, 0.5..=1.0));
-                    ui.add_space(4.0);
-                    let w = (ui.available_width() - 6.0) / 2.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        if ui
-                            .add_sized([w, 28.0], egui::Button::new("Randomize"))
-                            .on_hover_text("Random shape, mode and effect settings for every scene")
-                            .clicked()
-                        {
-                            s.randomize_visuals();
-                        }
-                        if ui
-                            .add_sized([w, 28.0], egui::Button::new("Reset"))
-                            .on_hover_text("Visual settings back to defaults (keeps the scene and render scale)")
-                            .clicked()
-                        {
-                            s.reset_visuals();
-                        }
-                    });
+                    knob(ui, t, "Intensity", &mut s.intensity, d.intensity, 0.2..=2.0, num(2, ""));
+                    knob(ui, t, "Bloom", &mut s.bloom_strength, d.bloom_strength, 0.0..=3.0, num(2, ""));
+                    knob(ui, t, "Bloom threshold", &mut s.bloom_threshold, d.bloom_threshold, 0.0..=3.0, num(2, ""));
+                    knob(ui, t, "Exposure", &mut s.exposure, d.exposure, 0.3..=3.0, num(2, ""));
+                    knob(ui, t, "Chromatic", &mut s.chromatic, d.chromatic, 0.0..=2.0, num(2, ""));
+                    knob(ui, t, "Film grain", &mut s.grain, d.grain, 0.0..=1.5, num(2, ""));
+                    knob(ui, t, "Vignette", &mut s.vignette, d.vignette, 0.0..=1.0, PCT);
+                    knob(ui, t, "Render scale", &mut s.render_scale, d.render_scale, 0.5..=1.0, PCT);
                 }
                 Section::Audio => {
                     spectrum_meter(ui, c.vis, t, accent, 56.0);
                     ui.label(RichText::new(c.device).small().color(t.faint));
                     ui.add_space(4.0);
-                    labeled(ui, t, "Sensitivity", egui::Slider::new(&mut s.sensitivity, 0.3..=2.5));
-                    labeled(ui, t, "Attack", egui::Slider::new(&mut s.attack_ms, 1.0..=80.0).suffix(" ms"));
-                    labeled(ui, t, "Decay", egui::Slider::new(&mut s.decay_ms, 30.0..=600.0).suffix(" ms"));
-                    labeled(ui, t, "Beat sensitivity", egui::Slider::new(&mut s.beat_sensitivity, 0.3..=2.5));
+                    knob(ui, t, "Sensitivity", &mut s.sensitivity, d.sensitivity, 0.3..=2.5, num(2, ""));
+                    knob(ui, t, "Attack", &mut s.attack_ms, d.attack_ms, 1.0..=80.0, num(0, " ms"));
+                    knob(ui, t, "Decay", &mut s.decay_ms, d.decay_ms, 30.0..=600.0, num(0, " ms"));
+                    knob(ui, t, "Beat sensitivity", &mut s.beat_sensitivity, d.beat_sensitivity, 0.3..=2.5, num(2, ""));
                 }
                 Section::Palette => {
                     ui.checkbox(&mut s.album_palette, "Take palette from album art");
-                    ui.add_enabled_ui(!s.album_palette || c.track.palette.is_none(), |ui| {
-                        egui::ComboBox::from_label("Fallback")
-                            .selected_text(PRESETS[s.preset_palette.min(PRESETS.len() - 1)].0)
-                            .show_ui(ui, |ui| {
-                                for (i, (n, _)) in PRESETS.iter().enumerate() {
-                                    ui.selectable_value(&mut s.preset_palette, i, *n);
-                                }
-                            });
+                    let album_showing = s.album_palette && c.track.palette.is_some();
+                    heading(ui, t, "Fallback palette");
+                    let why = if !s.album_palette {
+                        "Album colours are off, so this palette is always used."
+                    } else if album_showing {
+                        "Album colours are showing. This palette is used when nothing is playing or the cover has no colours."
+                    } else {
+                        "Showing now: nothing is playing or the cover has no colours."
+                    };
+                    ui.label(RichText::new(why).small().color(t.faint));
+                    ui.add_space(2.0);
+                    ui.add_enabled_ui(!album_showing, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for (i, (name, pal)) in PRESETS.iter().enumerate() {
+                            if palette_row(ui, t, name, pal, s.preset_palette == i).clicked() {
+                                s.preset_palette = i;
+                            }
+                        }
                     });
-                    ui.add_space(4.0);
+                    heading(ui, t, "Current colours");
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), Sense::hover());
                     let w = rect.width() / 4.0;
                     for (i, col) in c.palette.iter().enumerate() {
@@ -573,44 +620,37 @@ impl UiState {
                         ui.painter().rect_filled(r, CornerRadius::same(5), to_c32(*col, 255));
                     }
                 }
-                Section::Window => {
-                    let w = (ui.available_width() - 12.0) / 3.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        for (m, n) in [(WindowMode::Windowed, "Windowed"), (WindowMode::Fullscreen, "Fullscreen"), (WindowMode::Overlay, "Overlay")] {
-                            if ui.add_sized([w, 30.0], egui::Button::new(n).selected(c.mode == m)).clicked() {
-                                actions.push(UiAction::SetMode(m));
-                            }
-                        }
+                Section::General => {
+                    let modes = [(WindowMode::Windowed, "Windowed"), (WindowMode::Fullscreen, "Fullscreen"), (WindowMode::Overlay, "Overlay")];
+                    ui.label(RichText::new("Mode").color(t.dim));
+                    let mut mode = c.mode;
+                    if segmented(ui, t, &mut mode, &modes) {
+                        actions.push(UiAction::SetMode(mode));
+                    }
+                    choice(ui, t, "Start in", &mut s.start_mode, d.start_mode, &modes);
+
+                    heading(ui, t, "Overlay");
+                    let overlay = c.mode == WindowMode::Overlay;
+                    if !overlay {
+                        ui.label(RichText::new("These apply in overlay mode. Switch to Overlay to change them.").small().color(t.faint));
+                    }
+                    ui.add_enabled_ui(overlay, |ui| {
+                        egui::Frame::new()
+                            .fill(t.card)
+                            .stroke(Stroke::new(1.0_f32, t.border))
+                            .corner_radius(CornerRadius::same(8))
+                            .inner_margin(Margin::same(10))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                if !c.transparent_ok {
+                                    ui.label(RichText::new("Transparent overlay unsupported on this GPU; overlay will be opaque.").small().color(Color32::from_rgb(230, 150, 70)));
+                                }
+                                knob(ui, t, "Opacity", &mut s.overlay_opacity, d.overlay_opacity, 0.2..=1.0, PCT);
+                                ui.checkbox(&mut s.overlay_click_through, "Click-through");
+                            });
                     });
-                    if !c.transparent_ok {
-                        ui.label(RichText::new("Transparent overlay unsupported on this GPU; overlay will be opaque.").small().color(Color32::from_rgb(230, 150, 70)));
-                    }
-                    labeled(ui, t, "Overlay opacity", egui::Slider::new(&mut s.overlay_opacity, 0.2..=1.0));
-                    ui.checkbox(&mut s.overlay_click_through, "Overlay is click-through");
-                    ui.add_space(2.0);
-                    egui::ComboBox::from_label("Start in")
-                        .selected_text(format!("{:?}", s.start_mode))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut s.start_mode, WindowMode::Windowed, "Windowed");
-                            ui.selectable_value(&mut s.start_mode, WindowMode::Fullscreen, "Fullscreen");
-                            ui.selectable_value(&mut s.start_mode, WindowMode::Overlay, "Overlay");
-                        });
-                    labeled(ui, t, "Idle frame cap", egui::Slider::new(&mut s.idle_fps, 5..=60).suffix(" fps"));
-                    ui.checkbox(&mut s.show_track_toast, "Now-playing toast on track change");
-                    ui.checkbox(&mut s.show_volume, "Volume bar on the scene");
-                    ui.checkbox(&mut s.show_stats, "Show performance stats (F3)");
-                    ui.separator();
-                    ui.label(RichText::new(format!("GPU: {}  ·  DX12", c.adapter)).small().color(t.faint));
-                    if ui.small_button("Reset to defaults").clicked() {
-                        let (mode, expanded, theme) = (s.start_mode, s.sidebar_expanded, s.theme);
-                        *s = Settings::default();
-                        s.start_mode = mode;
-                        s.sidebar_expanded = expanded;
-                        s.theme = theme;
-                    }
-                }
-                Section::Theme => {
+
+                    heading(ui, t, "Theme");
                     let w = (ui.available_width() - 12.0) / 3.0;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
@@ -620,8 +660,44 @@ impl UiState {
                             }
                         }
                     });
-                    ui.add_space(6.0);
                     ui.label(RichText::new("Changes the app's panels and controls. The visualizer keeps its own colours.").small().color(t.faint));
+
+                    heading(ui, t, "On the scene");
+                    ui.checkbox(&mut s.show_track_toast, "Now-playing toast on track change");
+                    ui.checkbox(&mut s.show_volume, "Volume bar");
+                    ui.checkbox(&mut s.show_stats, "Performance stats (F3)");
+                    knob(ui, t, "Idle frame cap", &mut s.idle_fps, d.idle_fps, 5..=60, num(0, " fps"));
+
+                    ui.separator();
+                    ui.label(RichText::new(format!("GPU: {}  ·  DX12", c.adapter)).small().color(t.faint));
+                    if !self.confirm_reset {
+                        if ui.small_button("Reset all settings…").clicked() {
+                            self.confirm_reset = true;
+                        }
+                    } else {
+                        egui::Frame::new()
+                            .fill(t.card)
+                            .stroke(Stroke::new(1.0_f32, t.border))
+                            .corner_radius(CornerRadius::same(8))
+                            .inner_margin(Margin::same(10))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(RichText::new("Reset every setting to its default? Theme, startup mode and sidebar size stay.").color(t.text));
+                                ui.horizontal(|ui| {
+                                    if ui.button("Reset").clicked() {
+                                        let (mode, expanded, theme) = (s.start_mode, s.sidebar_expanded, s.theme);
+                                        *s = Settings::default();
+                                        s.start_mode = mode;
+                                        s.sidebar_expanded = expanded;
+                                        s.theme = theme;
+                                        self.confirm_reset = false;
+                                    }
+                                    if ui.button("Cancel").clicked() {
+                                        self.confirm_reset = false;
+                                    }
+                                });
+                            });
+                    }
                 }
                 Section::Hotkeys => {
                     let rows: [(&str, &[&str]); 9] = [
@@ -713,13 +789,75 @@ fn icon_button(ui: &mut egui::Ui, t: &Tokens, icon: Icon, size: f32) -> egui::Re
     resp
 }
 
-/// Width reserved for a slider's value box; wide enough for "12.0 ms" or "0.080 s".
+/// Width reserved for a slider's value box; wide enough for "140 ms", "0.08 s" or "100%".
 const VALUE_W: f32 = 72.0;
 
-/// A slider with its label on the line above, so long labels fit the drawer.
-fn labeled(ui: &mut egui::Ui, t: &Tokens, label: &str, slider: egui::Slider) {
+/// How a slider shows its value: fixed decimals and a unit, or a 0..=1 value as a percentage.
+#[derive(Clone, Copy)]
+struct Fmt {
+    decimals: usize,
+    suffix: &'static str,
+    pct: bool,
+    log: bool,
+}
+
+const fn num(decimals: usize, suffix: &'static str) -> Fmt {
+    Fmt { decimals, suffix, pct: false, log: false }
+}
+
+/// Whole percent; the value snaps to 0.01.
+const PCT: Fmt = Fmt { decimals: 2, suffix: "%", pct: true, log: false };
+
+impl Fmt {
+    const fn log(self) -> Self {
+        Self { log: true, ..self }
+    }
+
+    fn show(self, v: f64) -> String {
+        if self.pct {
+            format!("{:.0}{}", v * 100.0, self.suffix)
+        } else {
+            format!("{:.*}{}", self.decimals, v, self.suffix)
+        }
+    }
+
+    fn apply(self, s: egui::Slider<'_>) -> egui::Slider<'_> {
+        let s = s.fixed_decimals(self.decimals).suffix(self.suffix).logarithmic(self.log);
+        if self.pct {
+            s.custom_formatter(|v, _| format!("{:.0}", v * 100.0))
+                .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
+        } else {
+            s
+        }
+    }
+}
+
+/// The line above a control: its label, brighter and with a reset button when the value isn't
+/// the default. Double-clicking the label also resets. Returns true when a reset was asked for.
+fn label_row(ui: &mut egui::Ui, t: &Tokens, label: &str, modified: bool, default: &str) -> bool {
     ui.add_space(2.0);
-    ui.label(RichText::new(label).color(t.dim));
+    ui.horizontal(|ui| {
+        ui.set_min_height(18.0);
+        let col = if modified { t.text } else { t.dim };
+        let tip = if modified { format!("Default: {default}. Double-click to reset.") } else { format!("Default: {default}") };
+        let text = egui::Label::new(RichText::new(label).color(col)).selectable(false).sense(Sense::click());
+        let mut reset = ui.add(text).on_hover_text(tip).double_clicked();
+        if modified {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                reset |= icon_button(ui, t, Icon::Reset, 18.0).on_hover_text(format!("Reset to {default}")).clicked();
+            });
+        }
+        reset && modified
+    })
+    .inner
+}
+
+/// A slider with its label on the line above, so long labels fit the drawer. Double-click the
+/// label or the slider to put it back to `default`.
+fn knob<T: egui::emath::Numeric>(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &mut T, default: T, range: std::ops::RangeInclusive<T>, fmt: Fmt) {
+    let shown = fmt.show(default.to_f64());
+    // Compared as shown, so a value that only differs past the last digit isn't flagged.
+    let mut reset = label_row(ui, t, label, fmt.show(value.to_f64()) != shown, &shown);
     ui.scope(|ui| {
         // Slider, gap and a fixed-width value box fill the row exactly, so a wide value can't
         // push the drawer past its width.
@@ -727,8 +865,75 @@ fn labeled(ui: &mut egui::Ui, t: &Tokens, label: &str, slider: egui::Slider) {
         let s = ui.spacing_mut();
         s.slider_width = (w - VALUE_W - s.item_spacing.x).max(40.0);
         s.interact_size.x = VALUE_W;
-        ui.add(slider);
+        let rail_w = s.slider_width;
+        let r = ui.add(fmt.apply(egui::Slider::new(value, range)));
+        // The rail only senses drags, so look for the double-click ourselves. The value box is
+        // left out: a click there starts typing.
+        let rail = Rect::from_min_size(r.rect.min, egui::vec2(rail_w, r.rect.height()));
+        reset |= ui.rect_contains_pointer(rail) && ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
     });
+    if reset {
+        *value = default;
+    }
+}
+
+/// Segmented buttons with a label above, like `knob`.
+fn choice<T: Copy + PartialEq>(ui: &mut egui::Ui, t: &Tokens, label: &str, value: &mut T, default: T, options: &[(T, &str)]) {
+    let name = options.iter().find(|o| o.0 == default).map_or("", |o| o.1);
+    if label_row(ui, t, label, *value != default, name) {
+        *value = default;
+    }
+    segmented(ui, t, value, options);
+}
+
+/// Equal-width segments, one per option. Returns true when the user picked a different one.
+fn segmented<T: Copy + PartialEq>(ui: &mut egui::Ui, t: &Tokens, value: &mut T, options: &[(T, &str)]) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(7), t.control);
+    let w = rect.width() / options.len() as f32;
+    let mut changed = false;
+    for (i, (v, name)) in options.iter().enumerate() {
+        let seg = Rect::from_min_size(rect.min + egui::vec2(w * i as f32, 0.0), egui::vec2(w, rect.height()));
+        let r = ui.interact(seg, resp.id.with(i), Sense::click());
+        let on = *v == *value;
+        if on {
+            p.rect_filled(seg.shrink(2.0), CornerRadius::same(5), ui.visuals().selection.bg_fill);
+        } else if r.hovered() {
+            p.rect_filled(seg.shrink(2.0), CornerRadius::same(5), t.hover);
+        }
+        p.text(seg.center(), Align2::CENTER_CENTER, *name, FontId::proportional(13.0), if on || r.hovered() { t.text } else { t.dim });
+        if r.clicked() && !on {
+            *value = *v;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Small heading that opens a group of settings in a drawer.
+fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
+    ui.add_space(8.0);
+    ui.label(RichText::new(text).small().strong().color(t.dim));
+}
+
+/// Selectable palette preset: its four colours, then its name.
+fn palette_row(ui: &mut egui::Ui, t: &Tokens, name: &str, pal: &Palette, selected: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), Sense::click());
+    let p = ui.painter();
+    if selected {
+        p.rect_filled(rect, CornerRadius::same(7), ui.visuals().selection.bg_fill);
+    } else if resp.hovered() {
+        p.rect_filled(rect, CornerRadius::same(7), t.hover);
+    }
+    for (i, col) in pal.iter().enumerate() {
+        let r = Rect::from_min_size(egui::pos2(rect.left() + 10.0 + i as f32 * 17.0, rect.center().y - 7.0), Vec2::splat(14.0));
+        p.rect_filled(r, CornerRadius::same(3), to_c32(*col, 255));
+        p.rect_stroke(r, CornerRadius::same(3), Stroke::new(1.0_f32, t.border), StrokeKind::Inside);
+    }
+    let col = if selected || resp.hovered() { t.text } else { t.dim };
+    p.text(egui::pos2(rect.left() + 10.0 + 4.0 * 17.0 + 8.0, rect.center().y), Align2::LEFT_CENTER, name, FontId::proportional(13.5), col);
+    resp
 }
 
 /// Hotkey row: description on the left, key caps right-aligned.
@@ -784,12 +989,13 @@ enum Icon {
     Visuals,
     Audio,
     Palette,
-    Window,
-    Theme,
+    General,
     Keys,
     Collapse,
     Expand,
     Close,
+    HideSidebar,
+    Reset,
     Fullscreen,
     Overlay,
     Speaker,
@@ -833,18 +1039,15 @@ fn paint_icon(p: &egui::Painter, icon: Icon, c: Pos2, col: Color32) {
                 p.circle_filled(c + v(x, y), 1.5, col);
             }
         }
-        Icon::Window => {
-            p.rect_stroke(Rect::from_center_size(c, v(16.0, 13.0)), CornerRadius::same(2), s, StrokeKind::Middle);
-            line(v(-8.0, -2.5), v(8.0, -2.5));
-        }
-        Icon::Theme => {
-            // Half-filled circle (contrast).
-            p.circle_stroke(c, 7.0, s);
-            let pts: Vec<Pos2> = (0..=16).map(|i| {
-                let a = -std::f32::consts::FRAC_PI_2 + i as f32 / 16.0 * std::f32::consts::PI;
-                c + v(a.cos(), a.sin()) * 7.0
-            }).collect();
-            p.add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
+        Icon::General => {
+            // Gear: a ring with eight teeth around a hub.
+            p.circle_stroke(c, 5.0, s);
+            p.circle_stroke(c, 2.0, s);
+            for i in 0..8 {
+                let a = i as f32 / 8.0 * std::f32::consts::TAU;
+                let d = v(a.cos(), a.sin());
+                p.line_segment([c + d * 5.0, c + d * 7.5], Stroke::new(2.4_f32, col));
+            }
         }
         Icon::Keys => {
             p.rect_stroke(Rect::from_center_size(c, v(16.0, 11.0)), CornerRadius::same(2), s, StrokeKind::Middle);
@@ -864,6 +1067,25 @@ fn paint_icon(p: &egui::Painter, icon: Icon, c: Pos2, col: Color32) {
         Icon::Close => {
             line(v(-4.5, -4.5), v(4.5, 4.5));
             line(v(-4.5, 4.5), v(4.5, -4.5));
+        }
+        Icon::HideSidebar => {
+            // A panel with its left pane folding away.
+            p.rect_stroke(Rect::from_center_size(c, v(16.0, 13.0)), CornerRadius::same(2), s, StrokeKind::Middle);
+            line(v(-3.0, -6.5), v(-3.0, 6.5));
+            line(v(3.5, -3.0), v(1.0, 0.0));
+            line(v(1.0, 0.0), v(3.5, 3.0));
+        }
+        Icon::Reset => {
+            // Circular arrow, most of a turn, head at the open end.
+            let r = 4.5;
+            let (a0, a1) = (-40f32.to_radians(), 230f32.to_radians());
+            let at = |a: f32| v(a.cos(), a.sin());
+            let pts: Vec<Pos2> = (0..=16).map(|i| c + at(a0 + (a1 - a0) * i as f32 / 16.0) * r).collect();
+            p.add(egui::Shape::line(pts, s));
+            let (end, out) = (c + at(a1) * r, at(a1));
+            let tan = v(-out.y, out.x);
+            let head = vec![end + tan * 2.5, end - tan * 1.0 + out * 2.5, end - tan * 1.0 - out * 2.5];
+            p.add(egui::Shape::convex_polygon(head, col, Stroke::NONE));
         }
         Icon::Fullscreen => {
             for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
@@ -912,12 +1134,5 @@ fn spectrum_meter(ui: &mut egui::Ui, vis: &VisState, t: &Tokens, accent: Color32
     if height >= 40.0 {
         let k = vis.kick.clamp(0.0, 1.0);
         p.circle_filled(egui::pos2(rect.max.x - 10.0, rect.min.y + 10.0), 3.0 + 3.0 * k, t.text.gamma_multiply(0.2 + 0.8 * k));
-    }
-}
-
-fn scope_mode_name(m: ScopeMode) -> &'static str {
-    match m {
-        ScopeMode::Yt => "Y-T (sweep)",
-        ScopeMode::Polar => "Polar",
     }
 }

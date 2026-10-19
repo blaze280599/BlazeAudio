@@ -158,8 +158,11 @@ impl Settings {
     /// Everything in the Visuals panel back to defaults, except the scene on screen and the
     /// render scale (a performance choice, not part of the look).
     pub fn reset_visuals(&mut self) {
-        let (visual, render_scale) = (self.visual, self.render_scale);
-        let d = Settings::default();
+        self.copy_look(&Settings::default());
+    }
+
+    /// Takes the look (what Randomize and Reset change) from `d`; scene and render scale stay.
+    pub fn copy_look(&mut self, d: &Settings) {
         self.ascii_shape = d.ascii_shape;
         self.ascii_cell = d.ascii_cell;
         self.ascii_density = d.ascii_density;
@@ -176,8 +179,6 @@ impl Settings {
         self.chromatic = d.chromatic;
         self.grain = d.grain;
         self.vignette = d.vignette;
-        self.visual = visual;
-        self.render_scale = render_scale;
     }
 
     /// A random look: every scene's shape/mode and sliders, plus the post effects. Ranges are

@@ -24,6 +24,8 @@ pub struct WakeStyle {
     pub track: Color32,
     /// Tint the raised bars take on by their lift.
     pub crest: Option<Color32>,
+    /// Round handle at the value, so the slider reads as a control even at rest.
+    pub handle: Option<Color32>,
     pub sensitivity: f32,
     /// Half-width of the wake at full speed, in bars.
     pub reach: f32,
@@ -47,6 +49,7 @@ impl Default for WakeStyle {
             fill: Color32::from_gray(245),
             track: Color32::from_gray(39),
             crest: None,
+            handle: None,
             sensitivity: 1.0,
             reach: 6.0,
             skew: 0.6,
@@ -141,6 +144,12 @@ impl WakeSlider {
                 _ => base,
             };
             p.rect_filled(bar, CornerRadius::same(255), col);
+        }
+        if let Some(col) = st.handle {
+            // Grows under the pointer; the dark ring keeps it apart from the lit bars.
+            let x = rect.left() + h * (bar_w + st.gap) + bar_w / 2.0;
+            let r = if resp.hovered() || resp.dragged() { 7.0 } else { 5.5 };
+            p.circle(egui::pos2(x, rect.center().y), r, col, egui::Stroke::new(2.0_f32, Color32::from_black_alpha(150)));
         }
 
         // Keep animating until the handle and the wake have settled.
