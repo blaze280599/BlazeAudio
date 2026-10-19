@@ -71,7 +71,7 @@ fn fs_ferro(in: VsOut) -> @location(0) vec4f {
     let h0 = ferro_h(p.xz);
     let n = normalize(vec3f(h0 - ferro_h(p.xz + vec2f(e, 0.0)), e, h0 - ferro_h(p.xz + vec2f(0.0, e))));
     let r = reflect(rd, n);
-    let fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, -rd), 0.0), 5.0);
+    let fres = 0.04 + 0.96 * pow(clamp(1.0 - dot(n, -rd), 0.0, 1.0), 5.0);
     let lp = normalize(vec3f(-0.4, 0.8, 0.5));
     let spec = pow(max(dot(reflect(-lp, n), -rd), 0.0), 140.0);
     var c = vec3f(0.004) + ferro_env(r) * (0.3 + 1.4 * fres);

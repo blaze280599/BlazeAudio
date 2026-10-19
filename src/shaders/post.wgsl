@@ -3,15 +3,21 @@
 @group(1) @binding(0) var tex_a: texture_2d<f32>;
 @group(1) @binding(1) var tex_b: texture_2d<f32>;
 
+// A single NaN/inf pixel from any scene would be smeared into black blocks by the bloom
+// chain. D3D min/max return the non-NaN operand, so this clamp scrubs both.
+fn sanitize(c: vec3f) -> vec3f {
+  return min(max(c, vec3f(0.0)), vec3f(1000.0));
+}
+
 // ---- Crossfade: noisy radial dissolve with a glowing seam ----
 @fragment
 fn fs_composite(in: VsOut) -> @location(0) vec4f {
-  let a = textureSampleLevel(tex_a, samp_clamp, in.uv, 0.0).rgb;
+  let a = sanitize(textureSampleLevel(tex_a, samp_clamp, in.uv, 0.0).rgb);
   let t = G.transition;
   if (t >= 1.0) {
     return vec4f(a, 1.0);
   }
-  let b = textureSampleLevel(tex_b, samp_clamp, in.uv, 0.0).rgb;
+  let b = sanitize(textureSampleLevel(tex_b, samp_clamp, in.uv, 0.0).rgb);
   let p = aspect_uv(in.uv);
   let n = fbm(p * 2.2 + G.time * 0.25);
   let rr = length(p) * 0.55 + (n - 0.5) * 0.45;

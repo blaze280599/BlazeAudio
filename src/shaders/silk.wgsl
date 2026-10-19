@@ -45,7 +45,8 @@ fn fs_silk(in: VsOut) -> @location(0) vec4f {
   let diff = max(dot(n, l), 0.0);
   let nh = max(dot(n, hv), 0.0);
   let spec = pow(nh, 90.0);
-  let sheen = pow(1.0 - n.z, 2.2);
+  // Clamp: rounding can push n.z a hair above 1, and pow() of a negative is NaN.
+  let sheen = pow(max(1.0 - n.z, 0.0), 2.2);
 
   let tone = smoothstep(-1.4, 1.4, h);
   var col = mix(pal(3) * 0.35, pal(0) * 0.75, tone) * (0.04 + 0.96 * diff * diff);
