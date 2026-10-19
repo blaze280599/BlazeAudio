@@ -1,17 +1,24 @@
 # BlazeAudio
 
-An HDR music visualizer for Windows. It captures whatever your PC is playing through WASAPI loopback, reads now-playing info and album art from Spotify (or any media app) through Windows' media session API, and renders four audio-reactive scenes with DirectX 12.
+An HDR music visualizer for Windows. It captures whatever your PC is playing through WASAPI loopback, reads now-playing info and album art from Spotify (or any media app) through Windows' media session API, and renders eleven audio-reactive scenes with DirectX 12.
 
-Everything ships in one self-contained `blazeaudio.exe` (~7.5 MB, static CRT, system DLLs only).
+Everything ships in one self-contained `blazeaudio.exe` (static CRT, system DLLs only).
 
 ## Scenes
 
-| # | Scene | What reacts |
-|---|-------|-------------|
-| 1 | **Halo** | 128 mirrored log-frequency bars around the album art, falling peak caps, oscilloscope ring, beat shockwaves, god rays |
-| 2 | **Nebula** | 131,072 compute-shader particles spring toward morphing shapes (spectral sphere → torus → galaxy → cymatic plane), stirred by a divergence-free flow field, with HDR trails and radial bursts on kicks |
-| 3 | **Warp** | Infinite neon tunnel whose walls are lit by a 4-second spectrogram, with hyperspace streaks and beat rings flying at you |
-| 4 | **Horizon** | Raymarched synthwave landscape: the mountains are a 3D spectrogram, and a striped sun pulses with the bass |
+| Key | Scene | What reacts |
+|-----|-------|-------------|
+| `1` | **Halo** | 128 mirrored log-frequency bars around the album art, falling peak caps, oscilloscope ring, beat shockwaves, god rays |
+| `2` | **Nebula** | 131,072 compute-shader particles spring toward morphing shapes (spectral sphere → torus → galaxy → cymatic plane), stirred by a divergence-free flow field, with HDR trails and radial bursts on kicks |
+| `3` | **Silk** | Satin folds under a moving light: bass deepens the folds, mids turn the light, highs sharpen the sheen, beats ripple the cloth |
+| `4` | **Plasma** | Raymarched volumetric folds of light; energy speeds the turbulence, bass swells the shell |
+| `5` | **Molten Metal** | Caustic filaments through a heat ramp that run white-hot on kicks, with heat waves on each beat |
+| `6` | **Ferrofluid** | Glossy black sea of magnetic spikes; the spectrum raises spikes across the field and bass raises a crown |
+| `7` | **Liquid Ether** | Real-time fluid simulation colored by flow speed, stirred by six band-driven emitters plus a burst on each kick |
+| `8` | **Light Tunnel** | Fibre-optic strands spiralling into depth, with comets whose rate follows each strand's frequency band |
+| `9` | **Scanner** | CRT of stacked spectrum ridge lines (newest in front), swept by a beam once per beat with phosphor afterglow |
+| `0` | **Dither** | Domain-warped noise waves, Bayer-dithered into four palette shades, with beat rings |
+| `-` | **Faulty Terminal** | Flickering glyph CRT whose columns form a spectrum analyzer, with row-tearing glitches on beats |
 
 Scenes crossfade with a noisy radial dissolve. Auto-cycle switches scenes on the beat, and a big drop can also trigger a switch.
 
@@ -22,7 +29,7 @@ Scenes crossfade with a noisy radial dissolve. Auto-cycle switches scenes on the
 | `F1` / `Tab` | Settings overlay |
 | `F11` / `Alt+Enter` / double-click | Borderless fullscreen |
 | `O` | Overlay mode (transparent, always-on-top, click-through) |
-| `←` `→` / `1`–`4` / `Space` | Change scene |
+| `←` `→` / `1`–`9`, `0`, `-` / `Space` | Change scene |
 | `T` | Show now-playing card |
 | `F3` | FPS / CPU / RAM / BPM stats |
 | `Esc` | Close settings → leave fullscreen/overlay → quit |
@@ -56,7 +63,7 @@ Settings are saved to `%APPDATA%\BlazeAudio\settings.json`.
 | Idle (no audio) | 0.10 % | 18 MB | 9 MB |
 | Playing music, 170 fps | 0.64 % | 26 MB | 13 MB |
 
-GPU frame cost at 1280×720 is 0.26–0.46 ms per scene. Shader compilation plus device init takes about 0.5 s.
+GPU frame cost at 1280×720 is 0.4–1.4 ms per scene (Ferrofluid and Halo are the heaviest). Shader compilation plus device init takes about 0.6 s.
 
 Process *commit* (Private Bytes) reads about 215 MB. Nearly all of that is reserved, untouched address space from the D3D12 driver and wgpu's fixed 1M-entry descriptor heap. It isn't resident RAM. The "Memory" column in Task Manager shows the private working set.
 
@@ -96,5 +103,5 @@ src/
   ui.rs         egui settings panel, now-playing toast, stats
   sys.rs        global hotkeys, CPU/RAM stats, working-set trim
   snapshot.rs   headless self-test
-  shaders/      common, halo, nebula, warp, horizon, post (WGSL)
+  shaders/      one WGSL file per scene, plus common and post
 ```

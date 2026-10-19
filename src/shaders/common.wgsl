@@ -10,7 +10,8 @@ struct Globals {
   chromatic: f32, grain: f32, vignette: f32, transition: f32,
   bass_slow: f32, particle_count: f32, beat_trigger: f32, shape_morph: f32,
   cam_angle: f32, art_present: f32, kick: f32, travel: f32,
-  overlay_opacity: f32, art_spin: f32, scroll: f32, pad0: f32,
+  overlay_opacity: f32, art_spin: f32, scroll: f32, flow: f32,
+  beat_phase: f32, bpm: f32, pad1: f32, pad2: f32,
   pal: array<vec4f, 4>,
   ring_age: vec4f,
   ring_str: vec4f,
@@ -28,6 +29,10 @@ struct AudioData {
 @group(0) @binding(3) var samp_wrap: sampler;
 @group(0) @binding(4) var art_tex: texture_2d<f32>;
 @group(0) @binding(5) var samp_clamp: sampler;
+
+// Liquid Ether force emitters: [2i] = (uv.x, uv.y, radius, kind), [2i+1] = (force.xy, 0, 0).
+struct Splats { d: array<vec4f, 16>, };
+@group(0) @binding(6) var<uniform> SPL: Splats;
 
 const PI: f32 = 3.14159265;
 const TAU: f32 = 6.28318531;
@@ -152,4 +157,38 @@ fn stars(p: vec2f, density: f32) -> f32 {
   let present = step(0.86, hash21(id + 7.3));
   let tw = 0.55 + 0.45 * sin(G.time * (2.0 + h.x * 4.0) + h.y * 30.0);
   return present * exp(-d * d * 900.0) * tw * (0.6 + G.treble * 1.6 + G.hat * 1.5);
+}
+
+// Gradient noise in [-1, 1].
+fn gnoise2(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  let ga = hash22(i) * 2.0 - 1.0;
+  let gb = hash22(i + vec2f(1.0, 0.0)) * 2.0 - 1.0;
+  let gc = hash22(i + vec2f(0.0, 1.0)) * 2.0 - 1.0;
+  let gd = hash22(i + vec2f(1.0, 1.0)) * 2.0 - 1.0;
+  let a = dot(ga, f);
+  let b = dot(gb, f - vec2f(1.0, 0.0));
+  let c = dot(gc, f - vec2f(0.0, 1.0));
+  let d = dot(gd, f - vec2f(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 1.6;
+}
+
+// Barrel distortion for CRT-style scenes; returns uv and an inside-screen mask.
+fn crt_curve(uv: vec2f, k: f32) -> vec3f {
+  let c = uv * 2.0 - 1.0;
+  let w = c * (1.0 + k * dot(c.yx, c.yx));
+  let q = w * 0.5 + 0.5;
+  let e = smoothstep(vec2f(0.0), vec2f(0.004), q) * smoothstep(vec2f(0.0), vec2f(0.004), 1.0 - q);
+  return vec3f(q, e.x * e.y);
+}
+
+// Shared CRT finish: scanlines, slot mask and edge falloff.
+fn crt_finish(col: vec3f, frag: vec2f, q: vec2f, mask: f32) -> vec3f {
+  let scan = 0.78 + 0.22 * sin(frag.y * PI * 0.5);
+  let m = fract(frag.x / 3.0);
+  let slot = vec3f(select(0.85, 1.08, m < 0.34), select(0.85, 1.08, m >= 0.34 && m < 0.67), select(0.85, 1.08, m >= 0.67));
+  let edge = pow(max(16.0 * q.x * q.y * (1.0 - q.x) * (1.0 - q.y), 0.0), 0.18);
+  return col * scan * slot * edge * mask;
 }

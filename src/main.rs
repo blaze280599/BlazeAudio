@@ -22,7 +22,7 @@ use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Fullscreen, Icon, Window, WindowId, WindowLevel};
 
 use audio::{AudioEngine, AudioParams};
-use gpu::{FrameDesc, Gpu, MAX_PARTICLES, SCENE_NEBULA};
+use gpu::{FrameDesc, Gpu, MAX_PARTICLES, SCENE_COUNT, SCENE_NEBULA};
 use media::{MediaWatcher, TrackInfo};
 use palette::PRESETS;
 use settings::{Settings, WindowMode};
@@ -269,11 +269,18 @@ impl App {
             KeyCode::Enter if alt => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::KeyO => self.toggle_mode(WindowMode::Overlay),
             KeyCode::ArrowRight | KeyCode::KeyN | KeyCode::Space => self.switch_scene(self.scenes.cur + 1),
-            KeyCode::ArrowLeft | KeyCode::KeyP => self.switch_scene(self.scenes.cur + 3),
+            KeyCode::ArrowLeft | KeyCode::KeyP => self.switch_scene(self.scenes.cur + SCENE_COUNT - 1),
             KeyCode::Digit1 => self.switch_scene(0),
             KeyCode::Digit2 => self.switch_scene(1),
             KeyCode::Digit3 => self.switch_scene(2),
             KeyCode::Digit4 => self.switch_scene(3),
+            KeyCode::Digit5 => self.switch_scene(4),
+            KeyCode::Digit6 => self.switch_scene(5),
+            KeyCode::Digit7 => self.switch_scene(6),
+            KeyCode::Digit8 => self.switch_scene(7),
+            KeyCode::Digit9 => self.switch_scene(8),
+            KeyCode::Digit0 => self.switch_scene(9),
+            KeyCode::Minus => self.switch_scene(10),
             KeyCode::KeyT => self.toast_t = 6.0,
             KeyCode::F3 => self.settings.show_stats = !self.settings.show_stats,
             KeyCode::Escape => {
@@ -385,6 +392,7 @@ impl App {
             particle_count,
         );
         g.gpu.upload(&globals, &self.vis.audio_buffer());
+        g.gpu.upload_splats(&self.vis.splats());
 
         let surface_tex = match g.gpu.surface.as_ref().unwrap().get_current_texture() {
             Ok(t) => t,

@@ -11,15 +11,45 @@ pub const MAX_PARTICLES: u32 = 1 << 17;
 pub const SPEC_ROWS: u32 = 256;
 pub const SPEC_COLS: u32 = 64;
 pub const AUDIO_FLOATS: usize = 64 + 64 + 512;
-pub const SCENE_NAMES: [&str; 4] = ["Halo", "Nebula", "Warp", "Horizon"];
+pub const SCENE_NAMES: [&str; 11] = [
+    "Halo",
+    "Nebula",
+    "Silk",
+    "Plasma",
+    "Molten Metal",
+    "Ferrofluid",
+    "Liquid Ether",
+    "Light Tunnel",
+    "Scanner",
+    "Dither",
+    "Faulty Terminal",
+];
+pub const SCENE_COUNT: usize = SCENE_NAMES.len();
 pub const SCENE_NEBULA: usize = 1;
+pub const SCENE_ETHER: usize = 6;
+pub const SPLAT_VEC4S: usize = 16;
 
 const COMMON: &str = include_str!("shaders/common.wgsl");
-const HALO: &str = include_str!("shaders/halo.wgsl");
 const NEBULA: &str = include_str!("shaders/nebula.wgsl");
-const WARP: &str = include_str!("shaders/warp.wgsl");
-const HORIZON: &str = include_str!("shaders/horizon.wgsl");
+const ETHER: &str = include_str!("shaders/ether.wgsl");
 const POST: &str = include_str!("shaders/post.wgsl");
+
+/// Single-pass fullscreen scenes: (scene index, label, source, fragment entry point).
+const FULLSCREEN_SCENES: [(usize, &str, &str, &str); 9] = [
+    (0, "halo", include_str!("shaders/halo.wgsl"), "fs_halo"),
+    (2, "silk", include_str!("shaders/silk.wgsl"), "fs_silk"),
+    (3, "plasma", include_str!("shaders/plasma.wgsl"), "fs_plasma"),
+    (4, "molten", include_str!("shaders/molten.wgsl"), "fs_molten"),
+    (5, "ferro", include_str!("shaders/ferro.wgsl"), "fs_ferro"),
+    (7, "tunnel", include_str!("shaders/tunnel.wgsl"), "fs_tunnel"),
+    (8, "scanner", include_str!("shaders/scanner.wgsl"), "fs_scanner"),
+    (9, "dither", include_str!("shaders/dither.wgsl"), "fs_dither"),
+    (10, "terminal", include_str!("shaders/terminal.wgsl"), "fs_terminal"),
+];
+
+/// Liquid Ether simulation grid height (width follows the window aspect).
+const FLUID_H: u32 = 200;
+const FLUID_JACOBI: usize = 24;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Default)]
@@ -61,7 +91,11 @@ pub struct Globals {
     pub overlay_opacity: f32,
     pub art_spin: f32,
     pub scroll: f32,
-    pub _pad0: f32,
+    pub flow: f32,
+    pub beat_phase: f32,
+    pub bpm: f32,
+    pub _pad1: f32,
+    pub _pad2: f32,
     pub pal: [[f32; 4]; 4],
     pub ring_age: [f32; 4],
     pub ring_str: [f32; 4],
@@ -73,6 +107,17 @@ pub struct Tex {
 }
 
 fn make_tex(device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat, label: &str) -> Tex {
+    make_tex_with(device, w, h, format, wgpu::TextureUsages::empty(), label)
+}
+
+fn make_tex_with(
+    device: &wgpu::Device,
+    w: u32,
+    h: u32,
+    format: wgpu::TextureFormat,
+    extra: wgpu::TextureUsages,
+    label: &str,
+) -> Tex {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
@@ -80,11 +125,75 @@ fn make_tex(device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat, 
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | extra,
         view_formats: &[],
     });
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     Tex { tex, view }
+}
+
+const VEL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
+const SCALAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+
+/// Liquid Ether simulation state. Each frame: advect A->B, curl(B), force(B, curl)->A,
+/// div(A), Jacobi pA<->pB, grad(pA, A)->B, then copy B->A so A always holds the result.
+struct Fluid {
+    vel: [Tex; 2],
+    prs: [Tex; 2],
+    div: Tex,
+    curl: Tex,
+    bg_advect: wgpu::BindGroup,
+    bg_curl: wgpu::BindGroup,
+    bg_force: wgpu::BindGroup,
+    bg_div: wgpu::BindGroup,
+    bg_jacobi: [wgpu::BindGroup; 2],
+    bg_grad: wgpu::BindGroup,
+    bg_display: wgpu::BindGroup,
+    size: wgpu::Extent3d,
+}
+
+impl Fluid {
+    fn new(device: &wgpu::Device, tex1: &wgpu::BindGroupLayout, tex2: &wgpu::BindGroupLayout, scene_w: u32, scene_h: u32) -> Self {
+        let h = FLUID_H;
+        let w = ((scene_w as f32 / scene_h.max(1) as f32) * h as f32).round().max(16.0) as u32;
+        let copy = wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST;
+        let vel = [
+            make_tex_with(device, w, h, VEL_FORMAT, copy, "vel-a"),
+            make_tex_with(device, w, h, VEL_FORMAT, copy, "vel-b"),
+        ];
+        let prs = [make_tex(device, w, h, SCALAR_FORMAT, "prs-a"), make_tex(device, w, h, SCALAR_FORMAT, "prs-b")];
+        let div = make_tex(device, w, h, SCALAR_FORMAT, "div");
+        let curl = make_tex(device, w, h, SCALAR_FORMAT, "curl");
+        let bg2 = |a: &wgpu::TextureView, b: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: tex2,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(a) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(b) },
+                ],
+            })
+        };
+        let bg_display = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: tex1,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&vel[0].view) }],
+        });
+        Self {
+            bg_advect: bg2(&vel[0].view, &vel[0].view),
+            bg_curl: bg2(&vel[1].view, &vel[1].view),
+            bg_force: bg2(&vel[1].view, &curl.view),
+            bg_div: bg2(&vel[0].view, &vel[0].view),
+            bg_jacobi: [bg2(&prs[0].view, &div.view), bg2(&prs[1].view, &div.view)],
+            bg_grad: bg2(&prs[0].view, &vel[0].view),
+            bg_display,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            vel,
+            prs,
+            div,
+            curl,
+        }
+    }
 }
 
 struct Targets {
@@ -100,10 +209,18 @@ struct Targets {
     bg_down: Vec<wgpu::BindGroup>,
     bg_up: Vec<wgpu::BindGroup>,
     bg_tonemap: wgpu::BindGroup,
+    fluid: Fluid,
 }
 
 struct Pipelines {
-    scenes: [Option<wgpu::RenderPipeline>; 4],
+    scenes: Vec<Option<wgpu::RenderPipeline>>,
+    fl_advect: wgpu::RenderPipeline,
+    fl_curl: wgpu::RenderPipeline,
+    fl_force: wgpu::RenderPipeline,
+    fl_div: wgpu::RenderPipeline,
+    fl_jacobi: wgpu::RenderPipeline,
+    fl_grad: wgpu::RenderPipeline,
+    ether: wgpu::RenderPipeline,
     nebula_comp: wgpu::RenderPipeline,
     fade: wgpu::RenderPipeline,
     particle: wgpu::RenderPipeline,
@@ -128,6 +245,7 @@ pub struct Gpu {
 
     globals_buf: wgpu::Buffer,
     audio_buf: wgpu::Buffer,
+    splat_buf: wgpu::Buffer,
     spec_tex: wgpu::Texture,
     art_tex: wgpu::Texture,
     g0: wgpu::BindGroup,
@@ -241,6 +359,12 @@ impl Gpu {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let splat_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("splats"),
+            size: (SPLAT_VEC4S * 16) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let spec_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("spectrogram"),
             size: wgpu::Extent3d { width: SPEC_COLS, height: SPEC_ROWS, depth_or_array_layers: 1 },
@@ -326,6 +450,16 @@ impl Gpu {
                 samp_entry(3),
                 tex_entry(4, vis),
                 samp_entry(5),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: vis,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let spec_view = spec_tex.create_view(&Default::default());
@@ -340,6 +474,7 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&samp_wrap) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&art_view) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&samp_clamp) },
+                wgpu::BindGroupEntry { binding: 6, resource: splat_buf.as_entire_binding() },
             ],
         });
         let tex1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -422,11 +557,11 @@ impl Gpu {
                 source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{COMMON}\n{src}"))),
             })
         };
-        let m_halo = module("halo", HALO);
         let m_nebula = module("nebula", NEBULA);
-        let m_warp = module("warp", WARP);
-        let m_horizon = module("horizon", HORIZON);
+        let m_ether = module("ether", ETHER);
         let m_post = module("post", POST);
+        let m_scenes: Vec<(usize, wgpu::ShaderModule, &str)> =
+            FULLSCREEN_SCENES.iter().map(|(i, name, src, fs)| (*i, module(name, src), *fs)).collect();
 
         let additive = wgpu::BlendState {
             color: wgpu::BlendComponent {
@@ -478,9 +613,25 @@ impl Gpu {
         };
 
         let pipes = std::thread::scope(|s| {
-            let h_halo = s.spawn(|| full(&pl_g0, &m_halo, "fs_halo", HDR_FORMAT, None));
-            let h_warp = s.spawn(|| full(&pl_g0, &m_warp, "fs_warp", HDR_FORMAT, None));
-            let h_horizon = s.spawn(|| full(&pl_g0, &m_horizon, "fs_horizon", HDR_FORMAT, None));
+            // One thread per scene: FXC compiles each shader single-threaded.
+            let h_scenes: Vec<_> = m_scenes
+                .iter()
+                .map(|(i, m, fs)| {
+                    let (full, pl) = (&full, &pl_g0);
+                    (*i, s.spawn(move || full(pl, m, fs, HDR_FORMAT, None)))
+                })
+                .collect();
+            let h_fluid = s.spawn(|| {
+                (
+                    full(&pl_tex2, &m_ether, "fs_fl_advect", VEL_FORMAT, None),
+                    full(&pl_tex2, &m_ether, "fs_fl_curl", SCALAR_FORMAT, None),
+                    full(&pl_tex2, &m_ether, "fs_fl_force", VEL_FORMAT, None),
+                    full(&pl_tex2, &m_ether, "fs_fl_div", SCALAR_FORMAT, None),
+                    full(&pl_tex2, &m_ether, "fs_fl_jacobi", SCALAR_FORMAT, None),
+                    full(&pl_tex2, &m_ether, "fs_fl_grad", VEL_FORMAT, None),
+                    full(&pl_tex1, &m_ether, "fs_ether", HDR_FORMAT, None),
+                )
+            });
             let h_neb = s.spawn(|| {
                 let nebula_comp = full(&pl_tex1, &m_nebula, "fs_nebula", HDR_FORMAT, None);
                 let fade = full(&pl_g0, &m_nebula, "fs_fade", HDR_FORMAT, Some(fade_blend));
@@ -533,8 +684,20 @@ impl Gpu {
             });
             let (nebula_comp, fade, particle, particle_cs) = h_neb.join().unwrap();
             let (composite, down_first, down, up, tonemap) = h_post.join().unwrap();
+            let (fl_advect, fl_curl, fl_force, fl_div, fl_jacobi, fl_grad, ether) = h_fluid.join().unwrap();
+            let mut scenes: Vec<Option<wgpu::RenderPipeline>> = (0..SCENE_COUNT).map(|_| None).collect();
+            for (i, h) in h_scenes {
+                scenes[i] = Some(h.join().unwrap());
+            }
             Pipelines {
-                scenes: [Some(h_halo.join().unwrap()), None, Some(h_warp.join().unwrap()), Some(h_horizon.join().unwrap())],
+                scenes,
+                fl_advect,
+                fl_curl,
+                fl_force,
+                fl_div,
+                fl_jacobi,
+                fl_grad,
+                ether,
                 nebula_comp,
                 fade,
                 particle,
@@ -563,6 +726,7 @@ impl Gpu {
             render_scale,
             globals_buf,
             audio_buf,
+            splat_buf,
             spec_tex,
             art_tex,
             g0,
@@ -630,6 +794,27 @@ impl Gpu {
     pub fn upload(&self, globals: &Globals, audio: &[f32; AUDIO_FLOATS]) {
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(globals));
         self.queue.write_buffer(&self.audio_buf, 0, bytemuck::cast_slice(audio));
+    }
+
+    pub fn upload_splats(&self, splats: &[[f32; 4]; SPLAT_VEC4S]) {
+        self.queue.write_buffer(&self.splat_buf, 0, bytemuck::cast_slice(splats));
+    }
+
+    /// One Liquid Ether simulation step (see `Fluid` for the pass order).
+    fn step_fluid(&self, enc: &mut wgpu::CommandEncoder) {
+        let f = &self.targets.fluid;
+        let p = &self.pipes;
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        Self::fullscreen_pass(enc, &f.vel[1].view, clear, &p.fl_advect, &self.g0, Some(&f.bg_advect));
+        Self::fullscreen_pass(enc, &f.curl.view, clear, &p.fl_curl, &self.g0, Some(&f.bg_curl));
+        Self::fullscreen_pass(enc, &f.vel[0].view, clear, &p.fl_force, &self.g0, Some(&f.bg_force));
+        Self::fullscreen_pass(enc, &f.div.view, clear, &p.fl_div, &self.g0, Some(&f.bg_div));
+        for i in 0..FLUID_JACOBI {
+            let (dst, bg) = if i % 2 == 0 { (&f.prs[1], &f.bg_jacobi[0]) } else { (&f.prs[0], &f.bg_jacobi[1]) };
+            Self::fullscreen_pass(enc, &dst.view, clear, &p.fl_jacobi, &self.g0, Some(bg));
+        }
+        Self::fullscreen_pass(enc, &f.vel[1].view, clear, &p.fl_grad, &self.g0, Some(&f.bg_grad));
+        enc.copy_texture_to_texture(f.vel[1].tex.as_image_copy(), f.vel[0].tex.as_image_copy(), f.size);
     }
 
     pub fn write_spec_row(&self, row: u32, data: &[u8; SPEC_COLS as usize]) {
@@ -726,6 +911,15 @@ impl Gpu {
                 &self.g0,
                 Some(&t.bg_trail),
             );
+        } else if scene == SCENE_ETHER {
+            Self::fullscreen_pass(
+                enc,
+                &t.scene[slot].view,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                &self.pipes.ether,
+                &self.g0,
+                Some(&t.fluid.bg_display),
+            );
         } else if let Some(p) = &self.pipes.scenes[scene] {
             Self::fullscreen_pass(enc, &t.scene[slot].view, wgpu::LoadOp::Clear(wgpu::Color::BLACK), p, &self.g0, None);
         }
@@ -740,6 +934,9 @@ impl Gpu {
             cp.set_bind_group(0, &self.g0, &[]);
             cp.set_bind_group(1, &self.particle_bg, &[]);
             cp.dispatch_workgroups(MAX_PARTICLES.div_ceil(256), 1, 1);
+        }
+        if fd.cur_scene == SCENE_ETHER || fd.prev_scene == Some(SCENE_ETHER) {
+            self.step_fluid(enc);
         }
         if let Some(prev) = fd.prev_scene {
             self.draw_scene(enc, prev, fd.cur_slot ^ 1, fd.particle_count);
@@ -912,5 +1109,6 @@ fn build_targets(
         .collect();
     let bg_up = (0..BLOOM_LEVELS).map(|i| bg1(&bloom[i].view)).collect();
     let bg_tonemap = bg2(&hdr.view, &bloom[0].view);
-    Targets { w, h, scene, hdr, trail, bloom, bg_trail, bg_comp, bg_down, bg_up, bg_tonemap }
+    let fluid = Fluid::new(device, tex1, tex2, w, h);
+    Targets { w, h, scene, hdr, trail, bloom, bg_trail, bg_comp, bg_down, bg_up, bg_tonemap, fluid }
 }

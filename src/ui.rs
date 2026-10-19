@@ -208,7 +208,8 @@ impl UiState {
                     section(ui, "Scenes", true, |ui| {
                         ui.horizontal_wrapped(|ui| {
                             for (i, name) in SCENE_NAMES.iter().enumerate() {
-                                let label = format!("{} {}", i + 1, name);
+                                let key = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-"].get(i).copied().unwrap_or("");
+                                let label = format!("{key} {name}");
                                 if ui.selectable_label(c.scene == i, label).clicked() {
                                     actions.push(UiAction::Scene(i));
                                 }
@@ -289,7 +290,7 @@ impl UiState {
                             ("F1 / Tab", "Settings"),
                             ("F11 / Alt+Enter / dbl-click", "Fullscreen"),
                             ("O", "Overlay mode"),
-                            ("← → / 1-4", "Scenes"),
+                            ("← → / 1-9, 0, -", "Scenes"),
                             ("T", "Show now playing"),
                             ("F3", "Stats"),
                             ("Esc", "Back / close"),

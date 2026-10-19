@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use crate::audio::{AudioFrame, NUM_BANDS, WAVE_LEN};
-use crate::gpu::{Globals, AUDIO_FLOATS, SPEC_COLS};
+use crate::gpu::{Globals, AUDIO_FLOATS, SCENE_COUNT, SPEC_COLS, SPLAT_VEC4S};
 use crate::palette::Palette;
 use crate::settings::Settings;
 
@@ -29,6 +29,9 @@ pub struct VisState {
     ring_str: [f32; 4],
     ring_next: usize,
     travel: f32,
+    flow: f32,
+    since_beat: f32,
+    time: f32,
     cam_angle: f32,
     art_spin: f32,
     shape_m: f32,
@@ -68,6 +71,9 @@ impl VisState {
             ring_str: [0.0; 4],
             ring_next: 0,
             travel: 0.0,
+            flow: 0.0,
+            since_beat: 10.0,
+            time: 0.0,
             cam_angle: 0.6,
             art_spin: 0.0,
             shape_m: 0.0,
@@ -133,6 +139,7 @@ impl VisState {
             self.last_beat_count = f.beat_count;
             if !stale {
                 self.beat_this_frame = true;
+                self.since_beat = 0.0;
                 self.beat_strength = f.beat_strength;
                 self.kick = self.kick.max(f.beat_strength.max(0.45));
                 self.ring_age[self.ring_next] = 0.0;
@@ -150,6 +157,10 @@ impl VisState {
 
         // Motion integrators.
         self.travel += dt * (0.35 + self.energy * 2.2 + self.kick * 1.6);
+        // Gentler audio clock for the shader scenes: idles slowly, surges with the music.
+        self.flow += dt * (0.35 + self.energy * 1.1 + self.kick * 0.9);
+        self.since_beat += dt;
+        self.time += dt;
         self.cam_angle += dt * (0.07 + self.mid * 0.35 + self.kick * 0.3);
         self.art_spin += dt * (0.05 + self.energy * 0.25);
 
@@ -199,6 +210,41 @@ impl VisState {
             self.spec_total = self.spec_total.wrapping_add(1);
         }
         rows
+    }
+
+    /// 0..1 progress through the current beat at the tracked tempo (keeps sweeping if a beat
+    /// is missed, so beat-synced motion never stalls).
+    fn beat_phase(&self) -> f32 {
+        let period = if self.bpm > 0.0 { 60.0 / self.bpm } else { 0.5 };
+        (self.since_beat / period).fract()
+    }
+
+    /// Liquid Ether emitters: six orbiting jets (one per band group) plus a radial burst on
+    /// each beat. Layout matches `Splats` in common.wgsl; forces are in grid cells/s².
+    pub fn splats(&self) -> [[f32; 4]; SPLAT_VEC4S] {
+        let mut s = [[0.0f32; 4]; SPLAT_VEC4S];
+        let t = self.time;
+        let tau = std::f32::consts::TAU;
+        for i in 0..6 {
+            let fi = i as f32;
+            let ang = fi * tau / 6.0 + t * 0.19 + (t * 0.31 + fi * 1.7).sin() * 0.7;
+            let rad = 0.26 + 0.07 * (t * 0.43 + fi * 1.3).sin();
+            let pos = [0.5 + ang.cos() * rad * 0.9, 0.5 + ang.sin() * rad];
+            let g: f32 = self.bands[i * 10..i * 10 + 10].iter().sum::<f32>() / 10.0;
+            let swirl = (t * 0.23 + fi).sin().signum();
+            let (tx, ty) = (-ang.sin() * swirl, ang.cos() * swirl);
+            let push = self.kick * 1.2 - 0.25;
+            let (dx, dy) = (tx + ang.cos() * push, ty + ang.sin() * push);
+            let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+            let mag = 160.0 + g.powf(1.4) * 1900.0 + self.kick * 1100.0;
+            s[i * 2] = [pos[0], pos[1], 0.03 + g * 0.025, 0.0];
+            s[i * 2 + 1] = [dx / len * mag, dy / len * mag, 0.0, 0.0];
+        }
+        if self.kick > 0.05 {
+            s[12] = [0.5, 0.5, 0.16, 1.0];
+            s[13] = [self.kick * 2200.0 * self.beat_strength.max(0.4), 0.0, 0.0, 0.0];
+        }
+        s
     }
 
     pub fn audio_buffer(&self) -> [f32; AUDIO_FLOATS] {
@@ -268,7 +314,11 @@ impl VisState {
             overlay_opacity: s.overlay_opacity,
             art_spin: self.art_spin,
             scroll,
-            _pad0: 0.0,
+            flow: self.flow,
+            beat_phase: self.beat_phase(),
+            bpm: self.bpm,
+            _pad1: 0.0,
+            _pad2: 0.0,
             pal,
             ring_age: self.ring_age,
             ring_str: self.ring_str,
@@ -292,11 +342,11 @@ pub struct SceneMgr {
 
 impl SceneMgr {
     pub fn new(scene: usize) -> Self {
-        Self { cur: scene % 4, cur_slot: 0, prev: None, t: 1.0, scene_time: 0.0 }
+        Self { cur: scene % SCENE_COUNT, cur_slot: 0, prev: None, t: 1.0, scene_time: 0.0 }
     }
 
     pub fn request(&mut self, next: usize) {
-        let next = next % 4;
+        let next = next % SCENE_COUNT;
         if next == self.cur {
             return;
         }

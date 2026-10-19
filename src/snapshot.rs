@@ -170,6 +170,7 @@ pub fn run(dir: &Path) {
         let transition = if scenes.prev.is_some() { scenes.t } else { 1.0 };
         let g = vis.globals(&settings, gpu.scene_size(), time, dt, scenes.scene_time, transition, false, 1.0, particle_count);
         gpu.upload(&g, &vis.audio_buffer());
+        gpu.upload_splats(&vis.splats());
         let fd = FrameDesc { cur_scene: scenes.cur, cur_slot: scenes.cur_slot, prev_scene: scenes.prev, particle_count };
         if capture {
             Some(gpu.capture(&fd))
@@ -213,13 +214,13 @@ pub fn run(dir: &Path) {
             }
         }
         if let Some(img) = on_beat {
-            save(&format!("{}_{}_beat.png", i + 1, name.to_lowercase()), img);
+            save(&format!("{}_{}_beat.png", i + 1, name.to_lowercase().replace(" ", "_")), img);
         }
         for _ in 0..12 {
             step(&mut gpu, &mut vis, &mut scenes, false);
         }
         if let Some(img) = step(&mut gpu, &mut vis, &mut scenes, true) {
-            save(&format!("{}_{}.png", i + 1, name.to_lowercase()), img);
+            save(&format!("{}_{}.png", i + 1, name.to_lowercase().replace(" ", "_")), img);
         }
     }
 
