@@ -61,7 +61,7 @@ To keep it on a second monitor while you game or work, drag the window there and
 | `Up` / `Down` | Volume up / down 2% |
 | `M` | Mute / unmute |
 | `F3` | FPS / CPU / RAM / BPM stats |
-| `Esc` | Close the settings drawer, then the sidebar (fullscreen/overlay), then leave fullscreen/overlay, then quit |
+| `Esc` | Close the settings drawer, then the sidebar (fullscreen/overlay), then leave fullscreen/overlay |
 | `Ctrl+Alt+O` | Toggle overlay (**global**, works while click-through) |
 | `Ctrl+Alt+S` | Toggle the sidebar (**global**, makes the overlay clickable while open) |
 

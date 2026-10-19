@@ -260,7 +260,7 @@ impl App {
         self.apply_mode(target);
     }
 
-    fn handle_key(&mut self, el: &ActiveEventLoop, code: KeyCode) {
+    fn handle_key(&mut self, code: KeyCode) {
         let alt = self.modifiers.alt_key();
         match code {
             KeyCode::F1 | KeyCode::Tab => self.set_sidebar_visible(!self.show_sidebar),
@@ -288,10 +288,8 @@ impl App {
                     self.set_sidebar_visible(false);
                 } else if self.mode != WindowMode::Windowed {
                     self.apply_mode(WindowMode::Windowed);
-                } else {
-                    self.settings.save();
-                    el.exit();
                 }
+                // Windowed with nothing to close: Esc does nothing. Quitting is the close button.
             }
             _ => {}
         }
@@ -598,7 +596,7 @@ impl ApplicationHandler for App {
                 let wants_kb = self.gfx.as_ref().is_some_and(|g| g.egui_ctx.wants_keyboard_input());
                 if event.state == ElementState::Pressed && !event.repeat && !wants_kb && !(consumed && event.physical_key != PhysicalKey::Code(KeyCode::F1)) {
                     if let PhysicalKey::Code(code) = event.physical_key {
-                        self.handle_key(el, code);
+                        self.handle_key(code);
                     }
                 }
             }

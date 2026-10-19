@@ -210,6 +210,8 @@ impl UiState {
     pub fn draw(&mut self, ctx: &egui::Context, mut c: UiCtx) -> (Vec<UiAction>, Rect) {
         self.style(ctx, c.settings.theme);
         let t = tokens(c.settings.theme);
+        // Things floating over the scene sit on dark visuals, so they stay dark in the light theme.
+        let ft = tokens(if c.settings.theme == UiTheme::Light { UiTheme::Dark } else { c.settings.theme });
         let mut actions = Vec::new();
         let accent = to_c32(c.palette[0], 255);
 
@@ -250,7 +252,7 @@ impl UiState {
                 .interactable(false)
                 .show(ctx, |ui| {
                     egui::Frame::new()
-                        .fill(t.float)
+                        .fill(ft.float)
                         .corner_radius(CornerRadius::same(8))
                         .inner_margin(Margin::symmetric(10, 6))
                         .show(ui, |ui| {
@@ -264,13 +266,15 @@ impl UiState {
                                 c.stats.private_mb,
                                 c.vis.bpm
                             );
-                            ui.label(RichText::new(txt).monospace().color(t.text));
+                            ui.label(RichText::new(txt).monospace().color(ft.text));
                         });
                 });
         }
 
         if c.toast_alpha > 0.0 && c.settings.show_track_toast && !c.track.title.is_empty() {
-            egui::Area::new(egui::Id::new("toast"))
+            // An Area keeps the size it measured last time, so a longer title would wrap to the
+            // previous track's width. A fresh id per track makes it measure again.
+            egui::Area::new(egui::Id::new(("toast", &c.track.title, &c.track.artist, &c.track.album)))
                 .pivot(Align2::LEFT_BOTTOM)
                 // Rises above the volume bar while that is showing.
                 .fixed_pos(scene_rect.left_bottom() + egui::vec2(26.0, -26.0 - 64.0 * c.volume_alpha))
@@ -278,9 +282,9 @@ impl UiState {
                 .show(ctx, |ui| {
                     ui.multiply_opacity(c.toast_alpha);
                     egui::Frame::new()
-                        .fill(t.float)
+                        .fill(ft.float)
                         .corner_radius(CornerRadius::same(14))
-                        .stroke(Stroke::new(1.0_f32, t.border))
+                        .stroke(Stroke::new(1.0_f32, ft.border))
                         .inner_margin(Margin::same(10))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
@@ -288,11 +292,12 @@ impl UiState {
                                     ui.add(egui::Image::new((tex.id(), Vec2::splat(64.0))).corner_radius(CornerRadius::same(9)));
                                 }
                                 ui.vertical(|ui| {
+                                    ui.set_max_width(360.0);
                                     ui.add_space(6.0);
-                                    ui.label(RichText::new(&c.track.title).size(20.0).strong().color(t.text));
-                                    ui.label(RichText::new(&c.track.artist).size(14.0).color(t.dim));
+                                    ui.label(RichText::new(&c.track.title).size(20.0).strong().color(ft.text));
+                                    ui.label(RichText::new(&c.track.artist).size(14.0).color(ft.dim));
                                     if !c.track.album.is_empty() {
-                                        ui.label(RichText::new(&c.track.album).size(11.5).color(t.faint));
+                                        ui.label(RichText::new(&c.track.album).size(11.5).color(ft.faint));
                                     }
                                 });
                                 ui.add_space(8.0);
@@ -302,11 +307,11 @@ impl UiState {
         }
 
         if c.controls_alpha > 0.0 {
-            window_buttons(ctx, scene_rect, &c, &t, &mut actions);
+            window_buttons(ctx, scene_rect, &c, &ft, &mut actions);
         }
         self.volume_hot = false;
         if c.volume_alpha > 0.0 && c.settings.show_volume && c.volume.available() {
-            self.volume_bar(ctx, scene_rect, &c, &t, accent);
+            self.volume_bar(ctx, scene_rect, &c, &ft, accent);
         }
 
         (actions, scene_rect)
@@ -465,9 +470,9 @@ impl UiState {
         });
         ui.add_space(6.0);
 
+        // A solid scroll bar takes its own space instead of floating over the value boxes.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            // Sliders span the drawer, leaving room for the value box.
-            ui.spacing_mut().slider_width = ui.available_width() - 64.0;
             let s = &mut *c.settings;
             match sec {
                 Section::Visuals => {
@@ -622,13 +627,13 @@ impl UiState {
                     let rows: [(&str, &[&str]); 9] = [
                         ("Sidebar", &["F1", "Tab"]),
                         ("Scene", &["1", "2", "3"]),
-                        ("Fullscreen", &["F11", "Alt+Enter"]),
+                        ("Fullscreen", &["F11", "F", "Alt+Enter"]),
                         ("Overlay mode", &["O"]),
                         ("Show now playing", &["T"]),
                         ("Volume up / down", &["Up", "Down"]),
                         ("Mute", &["M"]),
                         ("Performance stats", &["F3"]),
-                        ("Back / close", &["Esc"]),
+                        ("Back", &["Esc"]),
                     ];
                     for (d, keys) in rows {
                         key_row(ui, t, d, keys);
@@ -708,11 +713,22 @@ fn icon_button(ui: &mut egui::Ui, t: &Tokens, icon: Icon, size: f32) -> egui::Re
     resp
 }
 
+/// Width reserved for a slider's value box; wide enough for "12.0 ms" or "0.080 s".
+const VALUE_W: f32 = 72.0;
+
 /// A slider with its label on the line above, so long labels fit the drawer.
 fn labeled(ui: &mut egui::Ui, t: &Tokens, label: &str, slider: egui::Slider) {
     ui.add_space(2.0);
     ui.label(RichText::new(label).color(t.dim));
-    ui.add(slider);
+    ui.scope(|ui| {
+        // Slider, gap and a fixed-width value box fill the row exactly, so a wide value can't
+        // push the drawer past its width.
+        let w = ui.available_width();
+        let s = ui.spacing_mut();
+        s.slider_width = (w - VALUE_W - s.item_spacing.x).max(40.0);
+        s.interact_size.x = VALUE_W;
+        ui.add(slider);
+    });
 }
 
 /// Hotkey row: description on the left, key caps right-aligned.
