@@ -27,6 +27,10 @@ A soft light seen through a grid of monospaced characters (` =+xX0S8#@`), bright
 
 Press `1` / `2` or use the buttons at the top of **Visuals** to switch scenes.
 
+## Volume
+
+Moving the mouse over the visualizer brings up a volume bar at the bottom centre, next to the fullscreen/overlay buttons. It sets the Windows output volume of the default device (the same level as the taskbar volume control) and follows changes made anywhere else. Drag or click the bars, or scroll over them; the bars around the handle rise in a wake as it moves. The speaker button mutes. `Up` / `Down` and `M` work without the mouse and flash the bar up for a moment. Turn it off in **Window**.
+
 ## Album-art colors
 
 When the track changes, BlazeAudio extracts the main colors from the cover and fades the visualizer to them over about a second. A now-playing card with the cover, title, and artist appears for a few seconds; press `T` to show it again.
@@ -50,6 +54,8 @@ To keep it on a second monitor while you game or work, drag the window there and
 | `O` | Overlay mode |
 | `1` / `2` | Faulty Terminal / Gradient ASCII |
 | `T` | Show now-playing card |
+| `Up` / `Down` | Volume up / down 2% |
+| `M` | Mute / unmute |
 | `F3` | FPS / CPU / RAM / BPM stats |
 | `Esc` | Close the settings drawer, then the sidebar (fullscreen/overlay), then leave fullscreen/overlay, then quit |
 | `Ctrl+Alt+O` | Toggle overlay (**global**, works while click-through) |
@@ -68,7 +74,7 @@ The sections:
 - **Visuals**: scene, Gradient ASCII shape, cell size, density, glyph and gradient opacity, intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs).
 - **Audio**: sensitivity, attack (how fast bars rise), decay (how fast they fall), beat sensitivity.
 - **Palette**: album-art colors on/off, fallback palette, swatches of the current colors.
-- **Window**: mode, overlay opacity, overlay click-through, startup mode, idle frame-rate cap, now-playing card, performance stats.
+- **Window**: mode, overlay opacity, overlay click-through, startup mode, idle frame-rate cap, now-playing card, volume bar, performance stats.
 - **Theme**: Dark, OLED black, or Light for the sidebar and controls.
 - **Hotkeys**: the full key list.
 - **Reset to defaults**.
@@ -85,6 +91,7 @@ Settings are saved to `%APPDATA%\BlazeAudio\settings.json` when you close the pa
   - **Beats**: SuperFlux-style spectral flux (lag-4, max-filtered, kick-weighted) with an adaptive mean + kσ threshold
   - **Tempo**: autocorrelation of the onset envelope over 5.5 s with a log-normal 120 BPM prior. Once a tempo locks, a refractory window keeps beat pulses on the beat instead of off-beat hats.
 - **Metadata**: `GlobalSystemMediaTransportControlsSessionManager` (prefers a Spotify session). The cover thumbnail is decoded, then a palette comes from k-means in Oklab, scored for vividness and hue diversity. The Spotify Web API is not used.
+- **Volume**: `IAudioEndpointVolume` on the default render endpoint, owned by a worker thread that applies changes from the UI and re-reads the level every 250 ms (re-resolving the default device every 2 s).
 - **Rendering** (wgpu → DX12):
   - The scene draws into an Rgba16Float target sized to the area beside the sidebar.
   - It's driven by smoothed bands, kick/hat envelopes, the beat count, and a "flow" clock that idles slowly and surges with the music.
@@ -145,7 +152,9 @@ src/
   palette.rs    Oklab k-means album palette, presets
   gpu.rs        wgpu renderer: scene target, bloom, tonemap, egui
   vis.rs        render-side animation state: bands, kick, flow clock, palette fade
-  ui.rs         egui sidebar + settings drawer, themes, now-playing toast, stats
+  ui.rs         egui sidebar + settings drawer, themes, now-playing toast, volume bar, stats
+  wake.rs       wake slider widget (bars that rise around the moving handle)
+  volume.rs     default output device volume/mute via Core Audio, on a worker thread
   settings.rs   settings model and persistence
   sys.rs        global hotkeys, CPU/RAM stats, working-set trim, overlay window fix
   snapshot.rs   headless self-test

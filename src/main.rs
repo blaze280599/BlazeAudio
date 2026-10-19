@@ -9,6 +9,8 @@ mod snapshot;
 mod sys;
 mod ui;
 mod vis;
+mod volume;
+mod wake;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -118,6 +120,9 @@ struct App {
     track_ver: u64,
     art_ver: u64,
     toast_t: f32,
+    volume: volume::Volume,
+    /// Seconds left of the volume bar flashing up after a volume key.
+    volume_flash: f32,
 
     hotkeys: sys::GlobalHotkeys,
     stats: sys::ProcStats,
@@ -162,6 +167,8 @@ impl App {
             track_ver: 0,
             art_ver: 0,
             toast_t: 0.0,
+            volume: volume::Volume::new(),
+            volume_flash: 0.0,
             hotkeys: sys::GlobalHotkeys::new(),
             stats: sys::ProcStats::new(),
             trim_at: Some(now + Duration::from_secs(4)),
@@ -262,6 +269,14 @@ impl App {
             KeyCode::KeyO => self.toggle_mode(WindowMode::Overlay),
             KeyCode::Digit1 => self.settings.visual = Scene::Terminal,
             KeyCode::Digit2 => self.settings.visual = Scene::GradientAscii,
+            KeyCode::ArrowUp | KeyCode::ArrowDown => {
+                self.volume.nudge(if code == KeyCode::ArrowUp { 0.02 } else { -0.02 });
+                self.volume_flash = 1.6;
+            }
+            KeyCode::KeyM => {
+                self.volume.set_muted(!self.volume.muted());
+                self.volume_flash = 1.6;
+            }
             KeyCode::KeyT => self.toast_t = 6.0,
             KeyCode::F3 => self.settings.show_stats = !self.settings.show_stats,
             KeyCode::Escape => {
@@ -326,6 +341,7 @@ impl App {
         g = self.gfx.take().unwrap();
 
         self.toast_t = (self.toast_t - dt).max(0.0);
+        self.volume_flash = (self.volume_flash - dt).max(0.0);
 
         // Audio -> visual state.
         // BLAZE_IGNORE_AUDIO=1 renders as if nothing is playing (for measuring the idle path).
@@ -335,10 +351,12 @@ impl App {
         // UI runs first: the docked sidebar decides how much of the window the scene gets.
         // egui only runs when something is on screen, so idle frames cost no UI work.
         let toast_alpha = (self.toast_t / 0.6).min(1.0).min((6.0 - self.toast_t) / 0.4).clamp(0.0, 1.0);
-        let still = self.last_mouse_move.elapsed().as_secs_f32();
+        // Resting on the volume bar keeps the controls up.
+        let still = if self.ui.volume_hot { 0.0 } else { self.last_mouse_move.elapsed().as_secs_f32() };
         let pointer_ok = self.mode != WindowMode::Overlay || self.show_sidebar;
         let controls_alpha = if pointer_ok { (1.0 - (still - 2.0) / 0.5).clamp(0.0, 1.0) } else { 0.0 };
-        let need_ui = self.show_sidebar || (self.toast_t > 0.0 && self.settings.show_track_toast) || self.settings.show_stats || controls_alpha > 0.0;
+        let volume_alpha = if self.settings.show_volume { controls_alpha.max((self.volume_flash / 0.4).min(1.0)) } else { 0.0 };
+        let need_ui = self.show_sidebar || (self.toast_t > 0.0 && self.settings.show_track_toast) || self.settings.show_stats || controls_alpha > 0.0 || volume_alpha > 0.0;
         let drawer_was_open = self.ui.drawer.is_some();
         let mut actions = Vec::new();
         let mut egui_out = None;
@@ -368,6 +386,8 @@ impl App {
                         show_sidebar: self.show_sidebar,
                         toast_alpha,
                         controls_alpha,
+                        volume: &self.volume,
+                        volume_alpha,
                     },
                 );
             });
@@ -450,7 +470,7 @@ impl App {
         }
         self.update_hittest();
 
-        self.idle = !drawer_open && controls_alpha <= 0.0 && self.toast_t <= 0.0 && self.vis.silent_for > 3.0;
+        self.idle = !drawer_open && controls_alpha <= 0.0 && volume_alpha <= 0.0 && self.toast_t <= 0.0 && self.vis.silent_for > 3.0;
         self.stats.update();
         if self.trim_at.is_some_and(|t| Instant::now() >= t) {
             self.trim_at = None;

@@ -61,6 +61,7 @@ pub struct Settings {
     pub preset_palette: usize,
 
     pub show_track_toast: bool,
+    pub show_volume: bool,
     pub show_stats: bool,
     pub idle_fps: u32,
 
@@ -95,6 +96,7 @@ impl Default for Settings {
             album_palette: true,
             preset_palette: 0,
             show_track_toast: true,
+            show_volume: true,
             show_stats: false,
             idle_fps: 30,
             start_mode: WindowMode::Windowed,

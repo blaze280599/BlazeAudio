@@ -1,5 +1,5 @@
-//! egui UI: docked sidebar (expanded or icon rail) with a settings drawer, on-scene controls,
-//! now-playing toast, and stats HUD.
+//! egui UI: docked sidebar (expanded or icon rail) with a settings drawer, on-scene controls
+//! (window buttons, volume bar), now-playing toast, and stats HUD.
 
 use egui::{Align2, Color32, CornerRadius, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 
@@ -8,6 +8,8 @@ use crate::palette::{Palette, PRESETS};
 use crate::settings::{AsciiShape, Scene, Settings, UiTheme, WindowMode};
 use crate::sys::ProcStats;
 use crate::vis::VisState;
+use crate::volume::Volume;
+use crate::wake::{WakeSlider, WakeStyle};
 
 const SIDEBAR_W: f32 = 224.0;
 const RAIL_W: f32 = 56.0;
@@ -109,6 +111,9 @@ pub struct UiState {
     styled: Option<UiTheme>,
     /// Settings section open in the drawer beside the sidebar.
     pub drawer: Option<Section>,
+    volume_slider: WakeSlider,
+    /// The pointer is on the volume bar (or dragging it), so it shouldn't fade out.
+    pub volume_hot: bool,
 }
 
 pub struct UiCtx<'a> {
@@ -128,6 +133,9 @@ pub struct UiCtx<'a> {
     pub toast_alpha: f32,
     /// Opacity of the on-scene window buttons (fades after the mouse rests).
     pub controls_alpha: f32,
+    pub volume: &'a Volume,
+    /// Opacity of the volume bar: the on-scene controls, or a flash after a volume key.
+    pub volume_alpha: f32,
 }
 
 fn to_c32(c: [f32; 3], a: u8) -> Color32 {
@@ -137,7 +145,7 @@ fn to_c32(c: [f32; 3], a: u8) -> Color32 {
 
 impl UiState {
     pub fn new() -> Self {
-        Self { art: None, styled: None, drawer: None }
+        Self { art: None, styled: None, drawer: None, volume_slider: WakeSlider::default(), volume_hot: false }
     }
 
     pub fn set_art(&mut self, ctx: &egui::Context, rgba: Option<&[u8]>) {
@@ -264,7 +272,8 @@ impl UiState {
         if c.toast_alpha > 0.0 && c.settings.show_track_toast && !c.track.title.is_empty() {
             egui::Area::new(egui::Id::new("toast"))
                 .pivot(Align2::LEFT_BOTTOM)
-                .fixed_pos(scene_rect.left_bottom() + egui::vec2(26.0, -26.0))
+                // Rises above the volume bar while that is showing.
+                .fixed_pos(scene_rect.left_bottom() + egui::vec2(26.0, -26.0 - 64.0 * c.volume_alpha))
                 .interactable(false)
                 .show(ctx, |ui| {
                     ui.multiply_opacity(c.toast_alpha);
@@ -295,8 +304,65 @@ impl UiState {
         if c.controls_alpha > 0.0 {
             window_buttons(ctx, scene_rect, &c, &t, &mut actions);
         }
+        self.volume_hot = false;
+        if c.volume_alpha > 0.0 && c.settings.show_volume && c.volume.available() {
+            self.volume_bar(ctx, scene_rect, &c, &t, accent);
+        }
 
         (actions, scene_rect)
+    }
+
+    /// Output volume over the bottom centre of the scene: mute button, wake slider, percent.
+    fn volume_bar(&mut self, ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens, accent: Color32) {
+        let vol = c.volume;
+        let muted = vol.muted();
+        let level = (vol.level() * 100.0).round();
+        let style = WakeStyle {
+            bars: 28,
+            height: 30.0,
+            rest_height: 8.0,
+            gap: 3.0,
+            fill: if muted { t.faint } else { t.text },
+            track: t.control,
+            crest: Some(accent),
+            // The bar is short, so a relaxed drag should already raise most of the wake: full
+            // height at ~130 %/s (crossing the track in under a second) instead of 320 %/s.
+            sensitivity: 2.5,
+            reach: 7.0,
+            ..WakeStyle::default()
+        };
+        let slider_w = (scene.width() - 160.0).clamp(120.0, 260.0);
+        let resp = egui::Area::new(egui::Id::new("volume"))
+            .pivot(Align2::CENTER_BOTTOM)
+            .fixed_pos(scene.center_bottom() + egui::vec2(0.0, -18.0))
+            .show(ctx, |ui| {
+                ui.multiply_opacity(c.volume_alpha);
+                egui::Frame::new()
+                    .fill(t.float)
+                    .stroke(Stroke::new(1.0_f32, t.border))
+                    .corner_radius(CornerRadius::same(22))
+                    .inner_margin(Margin { left: 6, right: 14, top: 4, bottom: 4 })
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            let icon = if muted || level <= 0.0 { Icon::Muted } else { Icon::Speaker };
+                            let tip = if muted { "Unmute (M)" } else { "Mute (M)" };
+                            if icon_button(ui, t, icon, 30.0).on_hover_text(tip).clicked() {
+                                vol.set_muted(!muted);
+                            }
+                            let (r, changed) = self.volume_slider.show(ui, level, slider_w, &style);
+                            if let Some(v) = changed {
+                                vol.set_level(v / 100.0);
+                            }
+                            let shown = changed.unwrap_or(level);
+                            let text = RichText::new(format!("{shown:>3.0}")).monospace().color(if muted { t.faint } else { t.dim });
+                            ui.add_sized([28.0, 30.0], egui::Label::new(text));
+                            r.dragged()
+                        })
+                        .inner
+                    })
+            });
+        self.volume_hot = resp.inner.inner || resp.response.contains_pointer();
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui, c: &mut UiCtx, t: &Tokens, accent: Color32, actions: &mut Vec<UiAction>) {
@@ -491,6 +557,7 @@ impl UiState {
                         });
                     labeled(ui, t, "Idle frame cap", egui::Slider::new(&mut s.idle_fps, 5..=60).suffix(" fps"));
                     ui.checkbox(&mut s.show_track_toast, "Now-playing toast on track change");
+                    ui.checkbox(&mut s.show_volume, "Volume bar on the scene");
                     ui.checkbox(&mut s.show_stats, "Show performance stats (F3)");
                     ui.separator();
                     ui.label(RichText::new(format!("GPU: {}  ·  DX12", c.adapter)).small().color(t.faint));
@@ -516,12 +583,14 @@ impl UiState {
                     ui.label(RichText::new("Changes the app's panels and controls. The visualizer keeps its own colours.").small().color(t.faint));
                 }
                 Section::Hotkeys => {
-                    let rows: [(&str, &[&str]); 7] = [
+                    let rows: [(&str, &[&str]); 9] = [
                         ("Sidebar", &["F1", "Tab"]),
                         ("Scene", &["1", "2"]),
                         ("Fullscreen", &["F11", "Alt+Enter"]),
                         ("Overlay mode", &["O"]),
                         ("Show now playing", &["T"]),
+                        ("Volume up / down", &["Up", "Down"]),
+                        ("Mute", &["M"]),
                         ("Performance stats", &["F3"]),
                         ("Back / close", &["Esc"]),
                     ];
@@ -671,6 +740,8 @@ enum Icon {
     Close,
     Fullscreen,
     Overlay,
+    Speaker,
+    Muted,
 }
 
 /// Small line icons, drawn in a ~16 pt box centred on `c`.
@@ -746,6 +817,24 @@ fn paint_icon(p: &egui::Painter, icon: Icon, c: Pos2, col: Color32) {
             for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                 line(v(6.0 * sx, 6.0 * sy), v(2.0 * sx, 6.0 * sy));
                 line(v(6.0 * sx, 6.0 * sy), v(6.0 * sx, 2.0 * sy));
+            }
+        }
+        Icon::Speaker | Icon::Muted => {
+            let body = [v(-7.0, -2.5), v(-4.0, -2.5), v(0.0, -6.0), v(0.0, 6.0), v(-4.0, 2.5), v(-7.0, 2.5)];
+            p.add(egui::Shape::convex_polygon(body.iter().map(|o| c + *o).collect(), col, Stroke::NONE));
+            if matches!(icon, Icon::Muted) {
+                line(v(3.0, -3.0), v(8.0, 3.0));
+                line(v(3.0, 3.0), v(8.0, -3.0));
+            } else {
+                for r in [3.5, 7.0] {
+                    let pts: Vec<Pos2> = (0..=8)
+                        .map(|i| {
+                            let a = (-45.0 + i as f32 * 11.25_f32).to_radians();
+                            c + v(a.cos(), a.sin()) * r
+                        })
+                        .collect();
+                    p.add(egui::Shape::line(pts, s));
+                }
             }
         }
         Icon::Overlay => {
