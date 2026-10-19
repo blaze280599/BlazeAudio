@@ -520,6 +520,25 @@ impl UiState {
                     labeled(ui, t, "Film grain", egui::Slider::new(&mut s.grain, 0.0..=1.5));
                     labeled(ui, t, "Vignette", egui::Slider::new(&mut s.vignette, 0.0..=1.0));
                     labeled(ui, t, "Render scale", egui::Slider::new(&mut s.render_scale, 0.5..=1.0));
+                    ui.add_space(4.0);
+                    let w = (ui.available_width() - 6.0) / 2.0;
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if ui
+                            .add_sized([w, 28.0], egui::Button::new("Randomize"))
+                            .on_hover_text("Random shape, mode and effect settings for every scene")
+                            .clicked()
+                        {
+                            s.randomize_visuals();
+                        }
+                        if ui
+                            .add_sized([w, 28.0], egui::Button::new("Reset"))
+                            .on_hover_text("Visual settings back to defaults (keeps the scene and render scale)")
+                            .clicked()
+                        {
+                            s.reset_visuals();
+                        }
+                    });
                 }
                 Section::Audio => {
                     spectrum_meter(ui, c.vis, t, accent, 56.0);

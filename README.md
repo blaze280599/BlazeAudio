@@ -75,7 +75,7 @@ Fullscreen and overlay hide the sidebar so the visuals get the whole screen; pre
 
 The sections:
 
-- **Visuals**: scene, Gradient ASCII shape, cell size, density, glyph and gradient opacity, Phosphor Scope mode, persistence, beam width and gain, intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs).
+- **Visuals**: scene, Gradient ASCII shape, cell size, density, glyph and gradient opacity, Phosphor Scope mode, persistence, beam width and gain, intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs). **Randomize** rolls a new look (shapes, modes and effect sliders, kept within watchable ranges) and **Reset** puts the visual settings back to defaults; both leave the current scene and render scale alone.
 - **Audio**: sensitivity, attack (how fast bars rise), decay (how fast they fall), beat sensitivity.
 - **Palette**: album-art colors on/off, fallback palette, swatches of the current colors.
 - **Window**: mode, overlay opacity, overlay click-through, startup mode, idle frame-rate cap, now-playing card, volume bar, performance stats.
