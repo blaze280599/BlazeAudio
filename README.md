@@ -1,6 +1,6 @@
 # BlazeAudio
 
-An HDR music visualizer for Windows. It captures whatever your PC is playing through WASAPI loopback, reads now-playing info and album art from Spotify (or any media app) through Windows' media session API, and renders an audio-reactive glitch-CRT visual, Faulty Terminal, with DirectX 12.
+An HDR music visualizer for Windows. It captures whatever your PC is playing through WASAPI loopback, reads now-playing info and album art from Spotify (or any media app) through Windows' media session API, and renders audio-reactive visuals (Faulty Terminal and Gradient ASCII) with DirectX 12.
 
 Everything ships in one self-contained `blazeaudio.exe` (static CRT, system DLLs only). There's nothing to install.
 
@@ -20,6 +20,12 @@ In a window, settings live in the sidebar on the left. Press `F1` to show or hid
 ## Faulty Terminal
 
 A flickering CRT full of procedural glyphs. The columns form a spectrum analyzer mirrored around the center (glyphs light up to each band's level, with a bright cap on top), highs make the glyphs churn faster, and each beat tears rows sideways with an RGB-split glitch.
+
+## Gradient ASCII
+
+A soft light seen through a grid of monospaced characters (` =+xX0S8#@`), brighter cells using denser glyphs. Pick the light's shape in **Visuals**: Horizon (a glow over a dark curve), Pinch (a band squeezed in the middle), Rise (a glow coming up from the bottom) or Eclipse (a corona around a dark disc). The edge of the light follows the spectrum and swells with the music, hats make the characters flicker, and each beat sends a ring of scrambled characters out from the light. When the scene comes on, the light fades in from its source while the characters decode.
+
+Press `1` / `2` or use the buttons at the top of **Visuals** to switch scenes.
 
 ## Album-art colors
 
@@ -42,6 +48,7 @@ To keep it on a second monitor while you game or work, drag the window there and
 | `F1` / `Tab` | Show / hide the sidebar |
 | `F11` / `F` / `Alt+Enter` / double-click | Borderless fullscreen |
 | `O` | Overlay mode |
+| `1` / `2` | Faulty Terminal / Gradient ASCII |
 | `T` | Show now-playing card |
 | `F3` | FPS / CPU / RAM / BPM stats |
 | `Esc` | Close the settings drawer, then the sidebar (fullscreen/overlay), then leave fullscreen/overlay, then quit |
@@ -58,7 +65,7 @@ Fullscreen and overlay hide the sidebar so the visuals get the whole screen; pre
 
 The sections:
 
-- **Visuals**: intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs).
+- **Visuals**: scene, Gradient ASCII shape, cell size, density, glyph and gradient opacity, intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs).
 - **Audio**: sensitivity, attack (how fast bars rise), decay (how fast they fall), beat sensitivity.
 - **Palette**: album-art colors on/off, fallback palette, swatches of the current colors.
 - **Window**: mode, overlay opacity, overlay click-through, startup mode, idle frame-rate cap, now-playing card, performance stats.
@@ -96,7 +103,7 @@ CPU and memory, measured on the earlier multi-scene build (Halo scene):
 | Idle (no audio) | 0.10 % | 18 MB | 9 MB |
 | Playing music, 170 fps | 0.64 % | 26 MB | 13 MB |
 
-The self-test measures Faulty Terminal at about 1.1 ms per frame (CPU + GPU, 1280×720, debug build). Shader compilation plus device init takes about 0.4 s.
+The self-test measures both scenes at about 1.1 ms per frame (CPU + GPU, 1280×720, debug build). Shader compilation plus device init takes about 0.4 s.
 
 Process *commit* (Private Bytes) reads about 215 MB. Nearly all of that is reserved, untouched address space from the D3D12 driver and wgpu's fixed 1M-entry descriptor heap. It isn't resident RAM. The "Memory" column in Task Manager shows the private working set.
 
@@ -116,7 +123,7 @@ The output is `target\release\blazeaudio.exe`. `.cargo/config.toml` enables `+cr
 target/release/blazeaudio.exe --snapshot out
 ```
 
-This runs headless: no window opens. It synthesizes a 124 BPM track, runs it through the real analyzer, and renders the visualizer offscreen to PNGs, on a beat and between beats. It also writes:
+This runs headless: no window opens. It synthesizes a 124 BPM track, runs it through the real analyzer, and renders the visualizer offscreen to PNGs: Faulty Terminal on a beat and between beats, then Gradient ASCII in each of its four shapes. It also writes:
 
 - `report.txt`: init time, frame time, detected beats with their phase, and the BPM estimate
 - `onset_trace.csv`: the onset and threshold curve from the audio-only check
@@ -142,9 +149,9 @@ src/
   settings.rs   settings model and persistence
   sys.rs        global hotkeys, CPU/RAM stats, working-set trim, overlay window fix
   snapshot.rs   headless self-test
-  shaders/      terminal.wgsl (the scene), common.wgsl, post.wgsl (bloom + tonemap)
+  shaders/      terminal.wgsl, ascii.wgsl (the scenes), common.wgsl, post.wgsl (bloom + tonemap)
 ```
 
 ## Credits
 
-Faulty Terminal is inspired by the [React Bits](https://reactbits.dev) background of the same name. The shader here is written from scratch for wgpu/WGSL and driven by audio instead of the cursor.
+Faulty Terminal and Gradient ASCII are inspired by the [React Bits](https://reactbits.dev) backgrounds of the same names. Faulty Terminal is written from scratch for wgpu/WGSL; Gradient ASCII is ported from the React Bits WebGL2 shader. Both are driven by audio instead of the cursor. The glyphs use Hack, the monospace font bundled with egui.

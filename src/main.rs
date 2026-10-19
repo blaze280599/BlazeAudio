@@ -25,7 +25,7 @@ use audio::{AudioEngine, AudioParams};
 use gpu::Gpu;
 use media::{MediaWatcher, TrackInfo};
 use palette::PRESETS;
-use settings::{Settings, WindowMode};
+use settings::{Scene, Settings, WindowMode};
 use vis::VisState;
 
 pub fn make_instance() -> wgpu::Instance {
@@ -260,6 +260,8 @@ impl App {
             KeyCode::F11 | KeyCode::KeyF => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::Enter if alt => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::KeyO => self.toggle_mode(WindowMode::Overlay),
+            KeyCode::Digit1 => self.settings.visual = Scene::Terminal,
+            KeyCode::Digit2 => self.settings.visual = Scene::GradientAscii,
             KeyCode::KeyT => self.toast_t = 6.0,
             KeyCode::F3 => self.settings.show_stats = !self.settings.show_stats,
             KeyCode::Escape => {
@@ -379,6 +381,10 @@ impl App {
         g.gpu.set_viewport(vx as u32, vy as u32, vw.max(0.0) as u32, vh.max(0.0) as u32);
 
         g.gpu.set_render_scale(self.settings.render_scale);
+        if g.gpu.scene != self.settings.visual {
+            g.gpu.scene = self.settings.visual;
+            self.vis.scene_time = 0.0;
+        }
         let overlay = self.mode == WindowMode::Overlay && g.gpu.transparent_ok;
         let globals = self.vis.globals(&self.settings, g.gpu.scene_size(), time, overlay);
         g.gpu.upload(&globals, &self.vis.audio_buffer());

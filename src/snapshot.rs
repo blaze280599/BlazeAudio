@@ -7,7 +7,7 @@ use std::time::Instant;
 use crate::audio::Offline;
 use crate::gpu::Gpu;
 use crate::palette::{self, PRESETS};
-use crate::settings::Settings;
+use crate::settings::{AsciiShape, Scene, Settings};
 use crate::vis::VisState;
 
 const SR: f32 = 48_000.0;
@@ -128,7 +128,7 @@ pub fn run(dir: &Path) {
         }
     };
     let init_ms = t0.elapsed().as_millis();
-    let settings = Settings::default();
+    let mut settings = Settings::default();
     let mut report = format!("adapter: {}\ninit (incl. shader compile): {init_ms} ms\n", gpu.adapter_name);
 
     let art = fake_album_art();
@@ -148,7 +148,7 @@ pub fn run(dir: &Path) {
     let mut last_bc = 0u32;
     let mut phases: Vec<f32> = Vec::new();
 
-    let mut step = |gpu: &mut Gpu, vis: &mut VisState, capture: bool| -> Option<(u32, u32, Vec<u8>)> {
+    let mut step = |gpu: &mut Gpu, vis: &mut VisState, settings: &Settings, capture: bool| -> Option<(u32, u32, Vec<u8>)> {
         for s in buf.iter_mut() {
             *s = synth.sample();
         }
@@ -162,7 +162,7 @@ pub fn run(dir: &Path) {
         let dt = 1.0 / fps;
         time += dt;
         vis.update(&f, dt, Instant::now());
-        let g = vis.globals(&settings, gpu.scene_size(), time, false);
+        let g = vis.globals(settings, gpu.scene_size(), time, false);
         gpu.upload(&g, &vis.audio_buffer());
         if capture {
             Some(gpu.capture())
@@ -188,7 +188,7 @@ pub fn run(dir: &Path) {
 
     let t = Instant::now();
     for _ in 0..150 {
-        step(&mut gpu, &mut vis, false);
+        step(&mut gpu, &mut vis, &settings, false);
     }
     let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     let ms = t.elapsed().as_secs_f32() * 1000.0 / 150.0;
@@ -196,7 +196,7 @@ pub fn run(dir: &Path) {
 ");
     // Capture right on a beat and between beats.
     for _ in 0..120 {
-        let cap = step(&mut gpu, &mut vis, true);
+        let cap = step(&mut gpu, &mut vis, &settings, true);
         if vis.kick > 0.8 {
             if let Some(img) = cap {
                 save("terminal_beat.png", img);
@@ -205,10 +205,36 @@ pub fn run(dir: &Path) {
         }
     }
     for _ in 0..12 {
-        step(&mut gpu, &mut vis, false);
+        step(&mut gpu, &mut vis, &settings, false);
     }
-    if let Some(img) = step(&mut gpu, &mut vis, true) {
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
         save("terminal.png", img);
+    }
+
+    // Gradient ASCII: time it, then one frame per shape once the intro has finished.
+    gpu.scene = Scene::GradientAscii;
+    settings.visual = Scene::GradientAscii;
+    vis.scene_time = 0.0;
+    let t = Instant::now();
+    for _ in 0..150 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    let ms = t.elapsed().as_secs_f32() * 1000.0 / 150.0;
+    report += &format!("render (gradient ascii): {ms:.2} ms/frame (CPU+GPU, 1280x720, unthrottled)\n");
+    for (shape, name) in [(AsciiShape::Horizon, "horizon"), (AsciiShape::Pinch, "pinch"), (AsciiShape::Rise, "rise"), (AsciiShape::Eclipse, "eclipse")] {
+        settings.ascii_shape = shape;
+        for _ in 0..20 {
+            step(&mut gpu, &mut vis, &settings, false);
+        }
+        if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+            save(&format!("ascii_{name}.png"), img);
+        }
+    }
+    // Mid-intro, to check the decode effect.
+    vis.scene_time = 0.9;
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("ascii_intro.png", img);
     }
 
     let expected = (time * BPM / 60.0) as u32;

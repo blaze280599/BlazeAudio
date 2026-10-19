@@ -37,7 +37,11 @@ pub fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
-fn linear_to_oklab(c: Rgb) -> Rgb {
+pub fn luminance(c: Rgb) -> f32 {
+    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+
+pub fn linear_to_oklab(c: Rgb) -> Rgb {
     let l = 0.4122214708 * c[0] + 0.5363325363 * c[1] + 0.0514459929 * c[2];
     let m = 0.2119034982 * c[0] + 0.6806995451 * c[1] + 0.1073969566 * c[2];
     let s = 0.0883024619 * c[0] + 0.2817188376 * c[1] + 0.6299787005 * c[2];

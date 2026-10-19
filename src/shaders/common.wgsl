@@ -6,7 +6,12 @@ struct Globals {
   beat_count: f32, flow: f32, intensity: f32, overlay: f32,
   overlay_opacity: f32, bloom_threshold: f32, bloom_knee: f32, bloom_strength: f32,
   exposure: f32, chromatic: f32, grain: f32, vignette: f32,
+  energy: f32, beat_age: f32, scene_time: f32, a_shape: f32,
+  a_cell: f32, a_density: f32, a_glyphs: f32, a_gradient: f32,
+  a_count: f32, _pad0: f32, _pad1: f32, _pad2: f32,
   pal: array<vec4f, 4>,
+  // Palette in Oklab, sorted darkest to brightest (Gradient ASCII ramp).
+  pal_lab: array<vec4f, 4>,
 };
 
 struct AudioData {

@@ -8,6 +8,22 @@ pub enum WindowMode {
     Overlay,
 }
 
+/// Which visual is on screen.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum Scene {
+    Terminal,
+    GradientAscii,
+}
+
+/// Light shape for the Gradient ASCII scene (order matches the shader).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum AsciiShape {
+    Horizon,
+    Pinch,
+    Rise,
+    Eclipse,
+}
+
 /// Colour scheme for the app's UI (not the scenes).
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum UiTheme {
@@ -19,6 +35,14 @@ pub enum UiTheme {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Not `scene`: older builds stored a numeric scene index under that name.
+    pub visual: Scene,
+    pub ascii_shape: AsciiShape,
+    pub ascii_cell: f32,
+    pub ascii_density: f32,
+    pub ascii_glyphs: f32,
+    pub ascii_gradient: f32,
+
     pub intensity: f32,
     pub bloom_strength: f32,
     pub bloom_threshold: f32,
@@ -50,6 +74,12 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            visual: Scene::Terminal,
+            ascii_shape: AsciiShape::Horizon,
+            ascii_cell: 18.0,
+            ascii_density: 0.8,
+            ascii_glyphs: 0.85,
+            ascii_gradient: 0.9,
             intensity: 1.0,
             bloom_strength: 0.9,
             bloom_threshold: 0.75,

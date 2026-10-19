@@ -12,6 +12,9 @@ winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 egui = { version = "0.33", default-features = false, features = ["default_fonts"] }
 egui-wgpu = { version = "0.33", default-features = false }
 egui-winit = { version = "0.33", default-features = false }
+# Both already come in with egui; used to rasterize the Gradient ASCII glyph atlas.
+ab_glyph = "0.2"
+epaint_default_fonts = "0.33"
 cpal = "0.18"
 realfft = "3.5"
 bytemuck = { version = "1", features = ["derive"] }

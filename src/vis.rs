@@ -4,9 +4,9 @@
 use std::time::Instant;
 
 use crate::audio::{AudioFrame, NUM_BANDS};
-use crate::gpu::{Globals, AUDIO_FLOATS};
-use crate::palette::Palette;
-use crate::settings::Settings;
+use crate::gpu::{Globals, ASCII_CHARS, AUDIO_FLOATS};
+use crate::palette::{linear_to_oklab, Palette};
+use crate::settings::{AsciiShape, Settings};
 
 pub struct VisState {
     pub bands: [f32; NUM_BANDS],
@@ -16,6 +16,10 @@ pub struct VisState {
     pub hat: f32,
     pub bpm: f32,
     last_beat_count: u32,
+    /// Seconds since the last beat.
+    beat_age: f32,
+    /// Seconds since the current scene came on screen (drives the Gradient ASCII intro).
+    pub scene_time: f32,
     flow: f32,
     pal_cur: Palette,
     pub pal_target: Palette,
@@ -33,6 +37,8 @@ impl VisState {
             hat: 0.0,
             bpm: 0.0,
             last_beat_count: 0,
+            beat_age: 10.0,
+            scene_time: 0.0,
             flow: 0.0,
             pal_cur: pal,
             pal_target: pal,
@@ -68,8 +74,11 @@ impl VisState {
             self.last_beat_count = f.beat_count;
             if !stale {
                 self.kick = self.kick.max(f.beat_strength.max(0.45));
+                self.beat_age = 0.0;
             }
         }
+        self.beat_age = (self.beat_age + dt).min(10.0);
+        self.scene_time = (self.scene_time + dt).min(1e4);
         self.kick *= (-dt / 0.13).exp();
 
         // Audio clock for the scene: idles slowly, surges with the music.
@@ -100,6 +109,21 @@ impl VisState {
         for i in 0..4 {
             pal[i] = [self.pal_cur[i][0], self.pal_cur[i][1], self.pal_cur[i][2], 1.0];
         }
+        // Gradient ASCII ramp: the same colours in Oklab, from the edge of the shadow (darkest)
+        // to the brightest point.
+        let mut ramp = self.pal_cur;
+        ramp.sort_by(|a, b| crate::palette::luminance(*a).total_cmp(&crate::palette::luminance(*b)));
+        let mut pal_lab = [[0.0f32; 4]; 4];
+        for i in 0..4 {
+            let l = linear_to_oklab(ramp[i]);
+            pal_lab[i] = [l[0], l[1], l[2], 0.0];
+        }
+        let shape = match s.ascii_shape {
+            AsciiShape::Horizon => 0.0,
+            AsciiShape::Pinch => 1.0,
+            AsciiShape::Rise => 2.0,
+            AsciiShape::Eclipse => 3.0,
+        };
         Globals {
             res: [w, h],
             inv_res: [1.0 / w, 1.0 / h],
@@ -119,7 +143,18 @@ impl VisState {
             chromatic: s.chromatic,
             grain: s.grain,
             vignette: if overlay { 0.0 } else { s.vignette },
+            energy: self.energy,
+            beat_age: self.beat_age,
+            scene_time: self.scene_time,
+            a_shape: shape,
+            a_cell: s.ascii_cell,
+            a_density: s.ascii_density,
+            a_glyphs: s.ascii_glyphs,
+            a_gradient: s.ascii_gradient,
+            a_count: ASCII_CHARS.chars().count() as f32,
+            _pad: [0.0; 3],
             pal,
+            pal_lab,
         }
     }
 }

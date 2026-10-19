@@ -5,7 +5,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Margin, Pos2, Rect, RichText, 
 
 use crate::media::{TrackInfo, ART_SIZE};
 use crate::palette::{Palette, PRESETS};
-use crate::settings::{Settings, UiTheme, WindowMode};
+use crate::settings::{AsciiShape, Scene, Settings, UiTheme, WindowMode};
 use crate::sys::ProcStats;
 use crate::vis::VisState;
 
@@ -405,6 +405,30 @@ impl UiState {
             let s = &mut *c.settings;
             match sec {
                 Section::Visuals => {
+                    let w = (ui.available_width() - 6.0) / 2.0;
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (sc, name) in [(Scene::Terminal, "1  Faulty Terminal"), (Scene::GradientAscii, "2  Gradient ASCII")] {
+                            if ui.add_sized([w, 30.0], egui::Button::new(name).selected(s.visual == sc)).clicked() {
+                                s.visual = sc;
+                            }
+                        }
+                    });
+                    if s.visual == Scene::GradientAscii {
+                        ui.add_space(2.0);
+                        egui::ComboBox::from_label("Shape")
+                            .selected_text(format!("{:?}", s.ascii_shape))
+                            .show_ui(ui, |ui| {
+                                for sh in [AsciiShape::Horizon, AsciiShape::Pinch, AsciiShape::Rise, AsciiShape::Eclipse] {
+                                    ui.selectable_value(&mut s.ascii_shape, sh, format!("{sh:?}"));
+                                }
+                            });
+                        labeled(ui, t, "Cell size", egui::Slider::new(&mut s.ascii_cell, 8.0..=48.0).suffix(" px"));
+                        labeled(ui, t, "Density", egui::Slider::new(&mut s.ascii_density, 0.0..=1.0));
+                        labeled(ui, t, "Glyph opacity", egui::Slider::new(&mut s.ascii_glyphs, 0.0..=1.0));
+                        labeled(ui, t, "Gradient opacity", egui::Slider::new(&mut s.ascii_gradient, 0.0..=1.0));
+                    }
+                    ui.separator();
                     labeled(ui, t, "Intensity", egui::Slider::new(&mut s.intensity, 0.2..=2.0));
                     labeled(ui, t, "Bloom", egui::Slider::new(&mut s.bloom_strength, 0.0..=3.0));
                     labeled(ui, t, "Bloom threshold", egui::Slider::new(&mut s.bloom_threshold, 0.0..=3.0));
@@ -492,8 +516,9 @@ impl UiState {
                     ui.label(RichText::new("Changes the app's panels and controls. The visualizer keeps its own colours.").small().color(t.faint));
                 }
                 Section::Hotkeys => {
-                    let rows: [(&str, &[&str]); 6] = [
+                    let rows: [(&str, &[&str]); 7] = [
                         ("Sidebar", &["F1", "Tab"]),
+                        ("Scene", &["1", "2"]),
                         ("Fullscreen", &["F11", "Alt+Enter"]),
                         ("Overlay mode", &["O"]),
                         ("Show now playing", &["T"]),

@@ -132,11 +132,13 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 name = "blazeaudio"
 version = "1.0.0"
 dependencies = [
+ "ab_glyph",
  "bytemuck",
  "cpal",
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "epaint_default_fonts",
  "image",
  "pollster",
  "realfft",

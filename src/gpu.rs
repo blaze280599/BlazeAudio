@@ -1,9 +1,11 @@
-//! wgpu (DX12) renderer: the Faulty Terminal scene into an HDR target, bloom chain, ACES
-//! tonemap, egui.
+//! wgpu (DX12) renderer: the active scene (Faulty Terminal or Gradient ASCII) into an HDR
+//! target, bloom chain, ACES tonemap, egui.
 
 use std::borrow::Cow;
 
 use bytemuck::{Pod, Zeroable};
+
+use crate::settings::Scene;
 
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const BLOOM_LEVELS: usize = 6;
@@ -11,6 +13,12 @@ pub const AUDIO_FLOATS: usize = 64;
 
 const COMMON: &str = include_str!("shaders/common.wgsl");
 const TERMINAL: &str = include_str!("shaders/terminal.wgsl");
+const ASCII: &str = include_str!("shaders/ascii.wgsl");
+
+/// Characters for Gradient ASCII, dimmest to brightest.
+pub const ASCII_CHARS: &str = " =+xX0S8#@";
+const ATLAS_CELL_W: u32 = 60;
+const ATLAS_CELL_H: u32 = 100;
 const POST: &str = include_str!("shaders/post.wgsl");
 
 /// Must match `Globals` in common.wgsl.
@@ -35,7 +43,18 @@ pub struct Globals {
     pub chromatic: f32,
     pub grain: f32,
     pub vignette: f32,
+    pub energy: f32,
+    pub beat_age: f32,
+    pub scene_time: f32,
+    pub a_shape: f32,
+    pub a_cell: f32,
+    pub a_density: f32,
+    pub a_glyphs: f32,
+    pub a_gradient: f32,
+    pub a_count: f32,
+    pub _pad: [f32; 3],
     pub pal: [[f32; 4]; 4],
+    pub pal_lab: [[f32; 4]; 4],
 }
 
 pub struct Tex {
@@ -72,7 +91,8 @@ struct Targets {
 }
 
 struct Pipelines {
-    scene: wgpu::RenderPipeline,
+    terminal: wgpu::RenderPipeline,
+    ascii: wgpu::RenderPipeline,
     down_first: wgpu::RenderPipeline,
     down: wgpu::RenderPipeline,
     up: wgpu::RenderPipeline,
@@ -96,6 +116,10 @@ pub struct Gpu {
     tex1_layout: wgpu::BindGroupLayout,
     tex2_layout: wgpu::BindGroupLayout,
     pipes: Pipelines,
+    /// Glyph atlas (with mips) for Gradient ASCII; owns the texture behind `bg_atlas`.
+    _atlas: wgpu::Texture,
+    bg_atlas: wgpu::BindGroup,
+    pub scene: Scene,
     targets: Targets,
     /// Area of the swapchain the scene is drawn into (x, y, w, h in physical pixels); the rest
     /// belongs to docked UI panels.
@@ -201,6 +225,8 @@ impl Gpu {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            // Only the glyph atlas has mips; everything else samples level 0.
+            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -282,7 +308,8 @@ impl Gpu {
                 source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{COMMON}\n{src}"))),
             })
         };
-        let m_scene = module("terminal", TERMINAL);
+        let m_terminal = module("terminal", TERMINAL);
+        let m_ascii = module("ascii", ASCII);
         let m_post = module("post", POST);
 
         let additive = wgpu::BlendState {
@@ -323,7 +350,8 @@ impl Gpu {
         };
 
         let pipes = std::thread::scope(|s| {
-            let h_scene = s.spawn(|| full(&pl_g0, &m_scene, "fs_terminal", HDR_FORMAT, None));
+            let h_terminal = s.spawn(|| full(&pl_g0, &m_terminal, "fs_terminal", HDR_FORMAT, None));
+            let h_ascii = s.spawn(|| full(&pl_tex1, &m_ascii, "fs_ascii", HDR_FORMAT, None));
             let h_post = s.spawn(|| {
                 let down_first = full(&pl_tex1, &m_post, "fs_down_first", HDR_FORMAT, None);
                 let down = full(&pl_tex1, &m_post, "fs_down", HDR_FORMAT, None);
@@ -332,7 +360,15 @@ impl Gpu {
                 (down_first, down, up, tonemap)
             });
             let (down_first, down, up, tonemap) = h_post.join().unwrap();
-            Pipelines { scene: h_scene.join().unwrap(), down_first, down, up, tonemap }
+            Pipelines { terminal: h_terminal.join().unwrap(), ascii: h_ascii.join().unwrap(), down_first, down, up, tonemap }
+        });
+
+        let atlas = build_atlas(&device, &queue);
+        let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+        let bg_atlas = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("atlas"),
+            layout: &tex1_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&atlas_view) }],
         });
 
         let egui = egui_wgpu::Renderer::new(&device, view_format, egui_wgpu::RendererOptions::default());
@@ -355,6 +391,9 @@ impl Gpu {
             tex1_layout,
             tex2_layout,
             pipes,
+            _atlas: atlas,
+            bg_atlas,
+            scene: Scene::Terminal,
             targets,
             viewport: [0, 0, width.max(1), height.max(1)],
             egui,
@@ -442,7 +481,12 @@ impl Gpu {
     pub fn encode(&mut self, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView, overlay: bool) {
         let t = &self.targets;
         let black = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
-        Self::fullscreen_pass(enc, &t.scene.view, black, &self.pipes.scene, &self.g0, None);
+        match self.scene {
+            Scene::Terminal => Self::fullscreen_pass(enc, &t.scene.view, black, &self.pipes.terminal, &self.g0, None),
+            Scene::GradientAscii => {
+                Self::fullscreen_pass(enc, &t.scene.view, black, &self.pipes.ascii, &self.g0, Some(&self.bg_atlas))
+            }
+        }
 
         // Bloom: progressive downsample, then tent upsample accumulating back up the chain.
         for i in 0..BLOOM_LEVELS {
@@ -569,6 +613,59 @@ impl Gpu {
         self.encode(&mut enc, &tmp.view, false);
         self.queue.submit([enc.finish()]);
     }
+}
+
+/// Rasterize `ASCII_CHARS` (Hack, from egui's bundled fonts) into one row of 60x100 cells,
+/// coverage in R, with a full mip chain so small cells stay smooth.
+fn build_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
+
+    let chars: Vec<char> = ASCII_CHARS.chars().collect();
+    let (w, h) = (ATLAS_CELL_W * chars.len() as u32, ATLAS_CELL_H);
+    let mut px = vec![0u8; (w * h) as usize];
+    let font = FontRef::try_from_slice(epaint_default_fonts::HACK_REGULAR).expect("bundled font");
+    let sf = font.as_scaled(PxScale::from(ATLAS_CELL_H as f32 * 0.78));
+    // Centre the em box vertically, like canvas `textBaseline = middle`.
+    let baseline = ATLAS_CELL_H as f32 / 2.0 + (sf.ascent() + sf.descent()) / 2.0;
+    for (i, &ch) in chars.iter().enumerate() {
+        let id = font.glyph_id(ch);
+        let x0 = (i as u32 * ATLAS_CELL_W) as f32 + (ATLAS_CELL_W as f32 - sf.h_advance(id)) / 2.0;
+        let glyph = id.with_scale_and_position(sf.scale(), ab_glyph::point(x0, baseline));
+        if let Some(outline) = font.outline_glyph(glyph) {
+            let b = outline.px_bounds();
+            outline.draw(|gx, gy, c| {
+                let (x, y) = (b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32);
+                if x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h {
+                    let p = &mut px[(y as u32 * w + x as u32) as usize];
+                    *p = (*p).max((c.clamp(0.0, 1.0) * 255.0) as u8);
+                }
+            });
+        }
+    }
+
+    let mips = 32 - w.max(h).leading_zeros();
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("ascii atlas"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: mips,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let base = image::GrayImage::from_raw(w, h, px).expect("atlas size");
+    for level in 0..mips {
+        let (lw, lh) = ((w >> level).max(1), (h >> level).max(1));
+        let img = if level == 0 { base.clone() } else { image::imageops::resize(&base, lw, lh, image::imageops::FilterType::Triangle) };
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            img.as_raw(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(lw), rows_per_image: None },
+            wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 },
+        );
+    }
+    tex
 }
 
 fn scaled(w: u32, h: u32, s: f32) -> (u32, u32) {
