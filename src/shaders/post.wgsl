@@ -37,21 +37,27 @@ fn karis(c: vec3f) -> f32 {
   return 1.0 / (1.0 + luma(c));
 }
 
+// The first level may read a scene target directly (no composite pass), so scrub its taps.
+fn tap(uv: vec2f, o: vec2f, ts: vec2f, first: bool) -> vec3f {
+  let c = s(uv, o, ts);
+  return select(c, sanitize(c), first);
+}
+
 fn downsample(uv: vec2f, first: bool) -> vec3f {
   let ts = 1.0 / vec2f(textureDimensions(tex_a));
-  let a = s(uv, vec2f(-2.0, 2.0), ts);
-  let b = s(uv, vec2f(0.0, 2.0), ts);
-  let c = s(uv, vec2f(2.0, 2.0), ts);
-  let d = s(uv, vec2f(-2.0, 0.0), ts);
-  let e = s(uv, vec2f(0.0, 0.0), ts);
-  let f = s(uv, vec2f(2.0, 0.0), ts);
-  let g = s(uv, vec2f(-2.0, -2.0), ts);
-  let h = s(uv, vec2f(0.0, -2.0), ts);
-  let i = s(uv, vec2f(2.0, -2.0), ts);
-  let j = s(uv, vec2f(-1.0, 1.0), ts);
-  let k = s(uv, vec2f(1.0, 1.0), ts);
-  let l = s(uv, vec2f(-1.0, -1.0), ts);
-  let m = s(uv, vec2f(1.0, -1.0), ts);
+  let a = tap(uv, vec2f(-2.0, 2.0), ts, first);
+  let b = tap(uv, vec2f(0.0, 2.0), ts, first);
+  let c = tap(uv, vec2f(2.0, 2.0), ts, first);
+  let d = tap(uv, vec2f(-2.0, 0.0), ts, first);
+  let e = tap(uv, vec2f(0.0, 0.0), ts, first);
+  let f = tap(uv, vec2f(2.0, 0.0), ts, first);
+  let g = tap(uv, vec2f(-2.0, -2.0), ts, first);
+  let h = tap(uv, vec2f(0.0, -2.0), ts, first);
+  let i = tap(uv, vec2f(2.0, -2.0), ts, first);
+  let j = tap(uv, vec2f(-1.0, 1.0), ts, first);
+  let k = tap(uv, vec2f(1.0, 1.0), ts, first);
+  let l = tap(uv, vec2f(-1.0, -1.0), ts, first);
+  let m = tap(uv, vec2f(1.0, -1.0), ts, first);
   let g0 = (j + k + l + m) * 0.25;
   let g1 = (a + b + d + e) * 0.25;
   let g2 = (b + c + e + f) * 0.25;
@@ -137,11 +143,11 @@ fn fs_tonemap(in: VsOut) -> @location(0) vec4f {
   let ca = G.chromatic * (0.0025 + 0.012 * G.kick * G.intensity) * length(d) * 2.0;
   let dir = normalize(d + vec2f(1e-5));
   let o = dir * ca;
-  var col = vec3f(
+  var col = sanitize(vec3f(
     textureSampleLevel(tex_a, samp_clamp, uv - o, 0.0).r,
     textureSampleLevel(tex_a, samp_clamp, uv, 0.0).g,
     textureSampleLevel(tex_a, samp_clamp, uv + o, 0.0).b
-  );
+  ));
   let bl = vec3f(
     textureSampleLevel(tex_b, samp_clamp, uv - o * 1.5, 0.0).r,
     textureSampleLevel(tex_b, samp_clamp, uv, 0.0).g,

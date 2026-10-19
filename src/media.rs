@@ -95,7 +95,8 @@ fn pick_session(mgr: &SessionManager) -> Option<Session> {
     mgr.GetCurrentSession().ok()
 }
 
-fn read_art(props: &MediaProps) -> Option<Vec<u8>> {
+/// Raw encoded thumbnail bytes (JPEG/PNG), undecoded.
+fn read_thumb(props: &MediaProps) -> Option<Vec<u8>> {
     let thumb = props.Thumbnail().ok()?;
     let stream = thumb.OpenReadAsync().ok()?.join().ok()?;
     let size = stream.Size().ok()? as u32;
@@ -106,7 +107,11 @@ fn read_art(props: &MediaProps) -> Option<Vec<u8>> {
     reader.LoadAsync(size).ok()?.join().ok()?;
     let mut buf = vec![0u8; size as usize];
     reader.ReadBytes(&mut buf).ok()?;
-    let img = image::load_from_memory(&buf).ok()?.to_rgba8();
+    Some(buf)
+}
+
+fn decode_art(buf: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(buf).ok()?.to_rgba8();
     // Spotify thumbnails often carry a letterbox; crop to the centered square first.
     let (w, h) = img.dimensions();
     let side = w.min(h);
@@ -161,10 +166,11 @@ fn watch_loop(shared: &Shared) {
                         i.track_version += 1;
                     }
                     if art_retry_until.is_some_and(|t| Instant::now() < t) {
-                        if let Some(art) = read_art(&props) {
-                            let h = hash(&art);
-                            if h != last_art_hash {
-                                last_art_hash = h;
+                        // Hash the encoded bytes so re-fetches of the same cover skip the decode.
+                        let fresh = read_thumb(&props).map(|buf| (hash(&buf), buf)).filter(|(h, _)| *h != last_art_hash);
+                        if let Some((h, buf)) = fresh {
+                            last_art_hash = h;
+                            if let Some(art) = decode_art(&buf) {
                                 let pal = palette::extract(&art, ART_SIZE as usize, ART_SIZE as usize);
                                 let mut i = shared.info.lock().unwrap();
                                 i.art = Some(Arc::new(art));

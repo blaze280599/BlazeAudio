@@ -172,6 +172,10 @@ impl VisState {
             self.shape_timer = 0.0;
         }
         self.shape_m += (self.shape_target - self.shape_m) * k(0.9);
+        // Snap once settled so the particle pass can skip evaluating the second shape.
+        if (self.shape_target - self.shape_m).abs() < 1e-3 {
+            self.shape_m = self.shape_target;
+        }
         if self.shape_target > 400.0 {
             self.shape_target -= 400.0;
             self.shape_m -= 400.0;

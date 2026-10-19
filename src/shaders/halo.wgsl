@@ -90,17 +90,23 @@ fn fs_halo(in: VsOut) -> @location(0) vec4f {
   col += pal(1) * (exp(-dw * 800.0) * 1.7 + exp(-dw * 90.0) * 0.12) * (0.35 + G.energy * 1.6);
 
   // ---- Album art (or plasma orb) in the core ----
+  // Only core pixels need this, and the plasma orb (two fbm) only while no art is shown.
   let rd = r0 * 0.74;
-  var auv = rot2(G.art_spin) * p / (rd * 2.0) * (1.0 - 0.06 * punch);
-  auv = vec2f(auv.x, -auv.y) + 0.5;
-  let art = textureSampleLevel(art_tex, samp_clamp, auv, 0.0).rgb;
-  let edge = smoothstep(rd * 0.55, rd, r);
-  let art_col = art * (0.62 + 0.55 * G.bass_slow + 0.6 * punch) * (1.0 - edge * 0.35);
-  let plasma = fbm(p * 5.0 + vec2f(G.time * 0.3, -G.time * 0.2) + fbm(p * 3.0 - G.time * 0.1));
-  let orb = pal_grad(plasma * 1.4 + G.time * 0.04) * (0.18 + G.bass * 1.2 + punch * 0.6) * (1.2 - r / rd) * plasma;
-  let inner = mix(orb, art_col, G.art_present);
-  let mask = 1.0 - smoothstep(rd - px * 1.5, rd, r);
-  col = mix(col, inner, mask);
+  if (r < rd) {
+    var auv = rot2(G.art_spin) * p / (rd * 2.0) * (1.0 - 0.06 * punch);
+    auv = vec2f(auv.x, -auv.y) + 0.5;
+    let art = textureSampleLevel(art_tex, samp_clamp, auv, 0.0).rgb;
+    let edge = smoothstep(rd * 0.55, rd, r);
+    let art_col = art * (0.62 + 0.55 * G.bass_slow + 0.6 * punch) * (1.0 - edge * 0.35);
+    var orb = vec3f(0.0);
+    if (G.art_present < 0.999) {
+      let plasma = fbm(p * 5.0 + vec2f(G.time * 0.3, -G.time * 0.2) + fbm(p * 3.0 - G.time * 0.1));
+      orb = pal_grad(plasma * 1.4 + G.time * 0.04) * (0.18 + G.bass * 1.2 + punch * 0.6) * (1.2 - r / rd) * plasma;
+    }
+    let inner = mix(orb, art_col, G.art_present);
+    let mask = 1.0 - smoothstep(rd - px * 1.5, rd, r);
+    col = mix(col, inner, mask);
+  }
   let rim = abs(r - rd);
   col += pal(2) * (exp(-rim * 650.0) * (0.9 + 2.5 * punch) + exp(-rim * 60.0) * 0.08);
 

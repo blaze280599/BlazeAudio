@@ -80,9 +80,11 @@ fn cs_update(@builtin(global_invocation_id) gid: vec3u) {
   let sa = u32(floor(m)) % 4u;
   let sb = (sa + 1u) % 4u;
   let f = smoothstep(0.0, 1.0, fract(m));
-  let ta = shape(sa, p.seed);
-  let tb = shape(sb, p.seed);
-  let tgt = mix(ta, tb, f);
+  // Between morphs shape_morph sits on an integer, so the second shape is only needed mid-morph.
+  var tgt = shape(sa, p.seed);
+  if (f > 0.0) {
+    tgt = mix(tgt, shape(sb, p.seed), f);
+  }
 
   var acc = (tgt.xyz - p.pos) * (9.0 + 6.0 * G.energy);
   acc += flow(p.pos * 1.25, G.time * 0.55) * (0.12 + G.mid * 0.7 + G.hat * 0.5);

@@ -209,6 +209,9 @@ struct Targets {
     bg_down: Vec<wgpu::BindGroup>,
     bg_up: Vec<wgpu::BindGroup>,
     bg_tonemap: wgpu::BindGroup,
+    /// Without a crossfade, bloom and tonemap read the scene slot directly (no composite pass).
+    bg_down_scene: [wgpu::BindGroup; 2],
+    bg_tonemap_scene: [wgpu::BindGroup; 2],
     fluid: Fluid,
 }
 
@@ -933,7 +936,7 @@ impl Gpu {
             cp.set_pipeline(&self.pipes.particle_cs);
             cp.set_bind_group(0, &self.g0, &[]);
             cp.set_bind_group(1, &self.particle_bg, &[]);
-            cp.dispatch_workgroups(MAX_PARTICLES.div_ceil(256), 1, 1);
+            cp.dispatch_workgroups(fd.particle_count.clamp(1, MAX_PARTICLES).div_ceil(256), 1, 1);
         }
         if fd.cur_scene == SCENE_ETHER || fd.prev_scene == Some(SCENE_ETHER) {
             self.step_fluid(enc);
@@ -943,20 +946,27 @@ impl Gpu {
         }
         self.draw_scene(enc, fd.cur_scene, fd.cur_slot, fd.particle_count);
 
+        // The composite pass only matters mid-crossfade; otherwise bloom and tonemap read the
+        // current scene slot directly (they sanitize it themselves), saving a full-res pass.
         let t = &self.targets;
-        Self::fullscreen_pass(
-            enc,
-            &t.hdr.view,
-            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-            &self.pipes.composite,
-            &self.g0,
-            Some(&t.bg_comp[fd.cur_slot]),
-        );
+        let (bg_down0, bg_tonemap) = if fd.prev_scene.is_some() {
+            Self::fullscreen_pass(
+                enc,
+                &t.hdr.view,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                &self.pipes.composite,
+                &self.g0,
+                Some(&t.bg_comp[fd.cur_slot]),
+            );
+            (&t.bg_down[0], &t.bg_tonemap)
+        } else {
+            (&t.bg_down_scene[fd.cur_slot], &t.bg_tonemap_scene[fd.cur_slot])
+        };
 
         // Bloom: progressive downsample, then tent upsample accumulating back up the chain.
         for i in 0..BLOOM_LEVELS {
-            let p = if i == 0 { &self.pipes.down_first } else { &self.pipes.down };
-            Self::fullscreen_pass(enc, &t.bloom[i].view, wgpu::LoadOp::Clear(wgpu::Color::BLACK), p, &self.g0, Some(&t.bg_down[i]));
+            let (p, bg) = if i == 0 { (&self.pipes.down_first, bg_down0) } else { (&self.pipes.down, &t.bg_down[i]) };
+            Self::fullscreen_pass(enc, &t.bloom[i].view, wgpu::LoadOp::Clear(wgpu::Color::BLACK), p, &self.g0, Some(bg));
         }
         for i in (1..BLOOM_LEVELS).rev() {
             Self::fullscreen_pass(enc, &t.bloom[i - 1].view, wgpu::LoadOp::Load, &self.pipes.up, &self.g0, Some(&t.bg_up[i]));
@@ -968,7 +978,7 @@ impl Gpu {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &self.pipes.tonemap,
             &self.g0,
-            Some(&t.bg_tonemap),
+            Some(bg_tonemap),
         );
     }
 
@@ -1109,6 +1119,23 @@ fn build_targets(
         .collect();
     let bg_up = (0..BLOOM_LEVELS).map(|i| bg1(&bloom[i].view)).collect();
     let bg_tonemap = bg2(&hdr.view, &bloom[0].view);
+    let bg_down_scene = [bg1(&scene[0].view), bg1(&scene[1].view)];
+    let bg_tonemap_scene = [bg2(&scene[0].view, &bloom[0].view), bg2(&scene[1].view, &bloom[0].view)];
     let fluid = Fluid::new(device, tex1, tex2, w, h);
-    Targets { w, h, scene, hdr, trail, bloom, bg_trail, bg_comp, bg_down, bg_up, bg_tonemap, fluid }
+    Targets {
+        w,
+        h,
+        scene,
+        hdr,
+        trail,
+        bloom,
+        bg_trail,
+        bg_comp,
+        bg_down,
+        bg_up,
+        bg_tonemap,
+        bg_down_scene,
+        bg_tonemap_scene,
+        fluid,
+    }
 }
