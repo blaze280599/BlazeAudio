@@ -22,11 +22,11 @@ use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Fullscreen, Icon, Window, WindowId, WindowLevel};
 
 use audio::{AudioEngine, AudioParams};
-use gpu::{FrameDesc, Gpu, MAX_PARTICLES, SCENE_COUNT, SCENE_NEBULA};
+use gpu::Gpu;
 use media::{MediaWatcher, TrackInfo};
 use palette::PRESETS;
 use settings::{Settings, WindowMode};
-use vis::{SceneMgr, VisState};
+use vis::VisState;
 
 pub fn make_instance() -> wgpu::Instance {
     wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -97,7 +97,6 @@ struct App {
     audio: AudioEngine,
     media: MediaWatcher,
     vis: VisState,
-    scenes: SceneMgr,
     gfx: Option<Gfx>,
     ui: ui::UiState,
 
@@ -118,7 +117,6 @@ struct App {
     track: TrackInfo,
     track_ver: u64,
     art_ver: u64,
-    art_present: f32,
     toast_t: f32,
 
     hotkeys: sys::GlobalHotkeys,
@@ -127,7 +125,6 @@ struct App {
     last_mouse_move: Instant,
     cursor_hidden: bool,
     last_click: Instant,
-    last_beat_seen: bool,
     hittest: Option<bool>,
     ignore_audio: bool,
     /// Scene area in physical pixels (x, y, w, h), i.e. the window minus docked panels.
@@ -143,7 +140,6 @@ impl App {
         let pal = PRESETS[settings.preset_palette.min(PRESETS.len() - 1)].1;
         let now = Instant::now();
         Self {
-            scenes: SceneMgr::new(settings.scene),
             mode: WindowMode::Windowed,
             instance: make_instance(),
             audio,
@@ -165,7 +161,6 @@ impl App {
             track: TrackInfo::default(),
             track_ver: 0,
             art_ver: 0,
-            art_present: 0.0,
             toast_t: 0.0,
             hotkeys: sys::GlobalHotkeys::new(),
             stats: sys::ProcStats::new(),
@@ -173,23 +168,12 @@ impl App {
             last_mouse_move: now,
             cursor_hidden: false,
             last_click: now - Duration::from_secs(5),
-            last_beat_seen: false,
             hittest: None,
             ignore_audio: std::env::var_os("BLAZE_IGNORE_AUDIO").is_some(),
             scene_px: [0.0, 0.0, f32::MAX, f32::MAX],
             cursor: PhysicalPosition::new(0.0, 0.0),
             settings,
         }
-    }
-
-    fn switch_scene(&mut self, n: usize) {
-        self.scenes.request(n);
-        if self.scenes.cur == SCENE_NEBULA && self.scenes.prev != Some(SCENE_NEBULA) {
-            if let Some(g) = &mut self.gfx {
-                g.gpu.reset_trails();
-            }
-        }
-        self.settings.scene = self.scenes.cur;
     }
 
     fn set_sidebar_visible(&mut self, v: bool) {
@@ -276,19 +260,6 @@ impl App {
             KeyCode::F11 | KeyCode::KeyF => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::Enter if alt => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::KeyO => self.toggle_mode(WindowMode::Overlay),
-            KeyCode::ArrowRight | KeyCode::KeyN | KeyCode::Space => self.switch_scene(self.scenes.cur + 1),
-            KeyCode::ArrowLeft | KeyCode::KeyP => self.switch_scene(self.scenes.cur + SCENE_COUNT - 1),
-            KeyCode::Digit1 => self.switch_scene(0),
-            KeyCode::Digit2 => self.switch_scene(1),
-            KeyCode::Digit3 => self.switch_scene(2),
-            KeyCode::Digit4 => self.switch_scene(3),
-            KeyCode::Digit5 => self.switch_scene(4),
-            KeyCode::Digit6 => self.switch_scene(5),
-            KeyCode::Digit7 => self.switch_scene(6),
-            KeyCode::Digit8 => self.switch_scene(7),
-            KeyCode::Digit9 => self.switch_scene(8),
-            KeyCode::Digit0 => self.switch_scene(9),
-            KeyCode::Minus => self.switch_scene(10),
             KeyCode::KeyT => self.toast_t = 6.0,
             KeyCode::F3 => self.settings.show_stats = !self.settings.show_stats,
             KeyCode::Escape => {
@@ -312,7 +283,6 @@ impl App {
         match self.hotkeys.poll() {
             Some(sys::GlobalKey::ToggleOverlay) => self.toggle_mode(WindowMode::Overlay),
             Some(sys::GlobalKey::ToggleSettings) => self.set_sidebar_visible(!self.show_sidebar),
-            Some(sys::GlobalKey::NextScene) => self.switch_scene(self.scenes.cur + 1),
             None => {}
         }
     }
@@ -330,9 +300,6 @@ impl App {
             }
             if new_art {
                 if let Some(g) = &mut self.gfx {
-                    if let Some(art) = &self.track.art {
-                        g.gpu.upload_art(art);
-                    }
                     self.ui.set_art(&g.egui_ctx, self.track.art.as_deref().map(|v| v.as_slice()));
                 }
             }
@@ -356,36 +323,12 @@ impl App {
         self.sync_media();
         g = self.gfx.take().unwrap();
 
-        let art_target = if self.track.art.is_some() { 1.0 } else { 0.0 };
-        self.art_present += (art_target - self.art_present) * (1.0 - (-dt / 0.5).exp());
         self.toast_t = (self.toast_t - dt).max(0.0);
 
         // Audio -> visual state.
         // BLAZE_IGNORE_AUDIO=1 renders as if nothing is playing (for measuring the idle path).
         let frame = if self.ignore_audio { audio::AudioFrame::default() } else { self.audio.snapshot() };
-        for (row, data) in self.vis.update(&frame, dt, now) {
-            g.gpu.write_spec_row(row, &data);
-        }
-
-        // Scene sequencing: auto-cycle lands on a beat; big drops can force a change.
-        self.scenes.update(dt, self.settings.transition_seconds);
-        let beat = self.vis.beat_this_frame;
-        let mut next = None;
-        if self.scenes.prev.is_none() {
-            let st = self.scenes.scene_time;
-            let cyc = self.settings.cycle_seconds;
-            if self.settings.auto_cycle && st > cyc && (beat || st > cyc + 4.0) && self.vis.silent_for < 2.0 {
-                next = Some(self.scenes.cur + 1);
-            } else if self.settings.switch_on_drop && self.vis.drop_this_frame && st > 12.0 {
-                next = Some(self.scenes.cur + 1);
-            }
-        }
-        self.last_beat_seen = beat;
-        if let Some(n) = next {
-            self.gfx = Some(g);
-            self.switch_scene(n);
-            g = self.gfx.take().unwrap();
-        }
+        self.vis.update(&frame, dt, now);
 
         // UI runs first: the docked sidebar decides how much of the window the scene gets.
         // egui only runs when something is on screen, so idle frames cost no UI work.
@@ -412,7 +355,6 @@ impl App {
                         track: &self.track,
                         vis: &self.vis,
                         palette,
-                        scene: self.scenes.cur,
                         mode: self.mode,
                         stats: &self.stats,
                         fps: self.fps,
@@ -437,22 +379,9 @@ impl App {
         g.gpu.set_viewport(vx as u32, vy as u32, vw.max(0.0) as u32, vh.max(0.0) as u32);
 
         g.gpu.set_render_scale(self.settings.render_scale);
-        let particle_count = (MAX_PARTICLES as f32 * self.settings.particle_fraction) as u32;
         let overlay = self.mode == WindowMode::Overlay && g.gpu.transparent_ok;
-        let transition = if self.scenes.prev.is_some() { self.scenes.t } else { 1.0 };
-        let globals = self.vis.globals(
-            &self.settings,
-            g.gpu.scene_size(),
-            time,
-            dt,
-            self.scenes.scene_time,
-            transition,
-            overlay,
-            self.art_present,
-            particle_count,
-        );
+        let globals = self.vis.globals(&self.settings, g.gpu.scene_size(), time, overlay);
         g.gpu.upload(&globals, &self.vis.audio_buffer());
-        g.gpu.upload_splats(&self.vis.splats());
 
         let surface_tex = match g.gpu.surface.as_ref().unwrap().get_current_texture() {
             Ok(t) => t,
@@ -477,13 +406,7 @@ impl App {
             ..Default::default()
         });
         let mut enc = g.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
-        let fd = FrameDesc {
-            cur_scene: self.scenes.cur,
-            cur_slot: self.scenes.cur_slot,
-            prev_scene: self.scenes.prev,
-            particle_count,
-        };
-        g.gpu.encode(&mut enc, &view, &fd, overlay);
+        g.gpu.encode(&mut enc, &view, overlay);
 
         if let Some(out) = egui_out {
             g.egui_state.handle_platform_output(&g.window, out.platform_output);
@@ -516,13 +439,12 @@ impl App {
         for a in actions {
             match a {
                 ui::UiAction::SetMode(m) => self.apply_mode(m),
-                ui::UiAction::Scene(s) => self.switch_scene(s),
                 ui::UiAction::HideSidebar => self.set_sidebar_visible(false),
             }
         }
         self.update_hittest();
 
-        self.idle = !drawer_open && controls_alpha <= 0.0 && self.toast_t <= 0.0 && self.vis.silent_for > 3.0 && self.scenes.prev.is_none();
+        self.idle = !drawer_open && controls_alpha <= 0.0 && self.toast_t <= 0.0 && self.vis.silent_for > 3.0;
         self.stats.update();
         if self.trim_at.is_some_and(|t| Instant::now() >= t) {
             self.trim_at = None;

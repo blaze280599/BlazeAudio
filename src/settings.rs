@@ -19,12 +19,6 @@ pub enum UiTheme {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub scene: usize,
-    pub auto_cycle: bool,
-    pub cycle_seconds: f32,
-    pub transition_seconds: f32,
-    pub switch_on_drop: bool,
-
     pub intensity: f32,
     pub bloom_strength: f32,
     pub bloom_threshold: f32,
@@ -32,8 +26,6 @@ pub struct Settings {
     pub chromatic: f32,
     pub grain: f32,
     pub vignette: f32,
-    pub trails: f32,
-    pub particle_fraction: f32,
     pub render_scale: f32,
 
     pub sensitivity: f32,
@@ -58,11 +50,6 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            scene: 0,
-            auto_cycle: true,
-            cycle_seconds: 40.0,
-            transition_seconds: 2.4,
-            switch_on_drop: true,
             intensity: 1.0,
             bloom_strength: 0.9,
             bloom_threshold: 0.75,
@@ -70,8 +57,6 @@ impl Default for Settings {
             chromatic: 0.6,
             grain: 0.35,
             vignette: 0.55,
-            trails: 0.82,
-            particle_fraction: 1.0,
             render_scale: 1.0,
             sensitivity: 1.0,
             attack_ms: 12.0,

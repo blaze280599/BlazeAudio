@@ -1,14 +1,14 @@
 //! `blazeaudio.exe --snapshot <dir>`: headless self-test. Synthesizes a 124 BPM track, runs it
-//! through the real analyzer, renders every scene offscreen and writes PNGs + a beat report.
+//! through the real analyzer, renders the visualizer offscreen and writes PNGs + a beat report.
 
 use std::path::Path;
 use std::time::Instant;
 
 use crate::audio::Offline;
-use crate::gpu::{FrameDesc, Gpu, MAX_PARTICLES, SCENE_NAMES};
+use crate::gpu::Gpu;
 use crate::palette::{self, PRESETS};
 use crate::settings::Settings;
-use crate::vis::{SceneMgr, VisState};
+use crate::vis::VisState;
 
 const SR: f32 = 48_000.0;
 const BPM: f32 = 124.0;
@@ -134,7 +134,6 @@ pub fn run(dir: &Path) {
     let art = fake_album_art();
     let pal = palette::extract(&art, crate::media::ART_SIZE as usize, crate::media::ART_SIZE as usize);
     report += &format!("album palette: {:?}\n", pal);
-    gpu.upload_art(&art);
 
     let mut synth = Synth { t: 0.0, kick_phase: 0.0, bass_phase: 0.0, rng: 0x1234_5678, hp: 0.0 };
     let mut off = Offline::new(SR, crate::audio_params(&settings));
@@ -148,9 +147,8 @@ pub fn run(dir: &Path) {
     let mut beats = 0u32;
     let mut last_bc = 0u32;
     let mut phases: Vec<f32> = Vec::new();
-    let particle_count = MAX_PARTICLES;
 
-    let mut step = |gpu: &mut Gpu, vis: &mut VisState, scenes: &mut SceneMgr, capture: bool| -> Option<(u32, u32, Vec<u8>)> {
+    let mut step = |gpu: &mut Gpu, vis: &mut VisState, capture: bool| -> Option<(u32, u32, Vec<u8>)> {
         for s in buf.iter_mut() {
             *s = synth.sample();
         }
@@ -163,19 +161,13 @@ pub fn run(dir: &Path) {
         }
         let dt = 1.0 / fps;
         time += dt;
-        for (row, data) in vis.update(&f, dt, Instant::now()) {
-            gpu.write_spec_row(row, &data);
-        }
-        scenes.update(dt, settings.transition_seconds);
-        let transition = if scenes.prev.is_some() { scenes.t } else { 1.0 };
-        let g = vis.globals(&settings, gpu.scene_size(), time, dt, scenes.scene_time, transition, false, 1.0, particle_count);
+        vis.update(&f, dt, Instant::now());
+        let g = vis.globals(&settings, gpu.scene_size(), time, false);
         gpu.upload(&g, &vis.audio_buffer());
-        gpu.upload_splats(&vis.splats());
-        let fd = FrameDesc { cur_scene: scenes.cur, cur_slot: scenes.cur_slot, prev_scene: scenes.prev, particle_count };
         if capture {
-            Some(gpu.capture(&fd))
+            Some(gpu.capture())
         } else {
-            gpu.step_offscreen(&fd);
+            gpu.step_offscreen();
             None
         }
     };
@@ -194,47 +186,29 @@ pub fn run(dir: &Path) {
         let _ = image::save_buffer(&path, &data, w, h, image::ColorType::Rgba8);
     };
 
-    for (i, name) in SCENE_NAMES.iter().enumerate() {
-        let mut scenes = SceneMgr::new(i);
-        gpu.reset_trails();
-        let t = Instant::now();
-        for _ in 0..150 {
-            step(&mut gpu, &mut vis, &mut scenes, false);
-        }
-        let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        let ms = t.elapsed().as_secs_f32() * 1000.0 / 150.0;
-        report += &format!("scene {name}: {ms:.2} ms/frame (CPU+GPU, 1280x720, unthrottled)\n");
-        // Capture right on a beat and between beats.
-        let mut on_beat = None;
-        for _ in 0..120 {
-            let cap = step(&mut gpu, &mut vis, &mut scenes, true);
-            if vis.kick > 0.8 {
-                on_beat = cap;
-                break;
+    let t = Instant::now();
+    for _ in 0..150 {
+        step(&mut gpu, &mut vis, false);
+    }
+    let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    let ms = t.elapsed().as_secs_f32() * 1000.0 / 150.0;
+    report += &format!("render: {ms:.2} ms/frame (CPU+GPU, 1280x720, unthrottled)
+");
+    // Capture right on a beat and between beats.
+    for _ in 0..120 {
+        let cap = step(&mut gpu, &mut vis, true);
+        if vis.kick > 0.8 {
+            if let Some(img) = cap {
+                save("terminal_beat.png", img);
             }
-        }
-        if let Some(img) = on_beat {
-            save(&format!("{}_{}_beat.png", i + 1, name.to_lowercase().replace(" ", "_")), img);
-        }
-        for _ in 0..12 {
-            step(&mut gpu, &mut vis, &mut scenes, false);
-        }
-        if let Some(img) = step(&mut gpu, &mut vis, &mut scenes, true) {
-            save(&format!("{}_{}.png", i + 1, name.to_lowercase().replace(" ", "_")), img);
+            break;
         }
     }
-
-    // Mid-transition frame.
-    let mut scenes = SceneMgr::new(0);
-    for _ in 0..30 {
-        step(&mut gpu, &mut vis, &mut scenes, false);
+    for _ in 0..12 {
+        step(&mut gpu, &mut vis, false);
     }
-    scenes.request(2);
-    for _ in 0..((settings.transition_seconds * 0.45 * fps) as usize) {
-        step(&mut gpu, &mut vis, &mut scenes, false);
-    }
-    if let Some(img) = step(&mut gpu, &mut vis, &mut scenes, true) {
-        save("5_transition.png", img);
+    if let Some(img) = step(&mut gpu, &mut vis, true) {
+        save("terminal.png", img);
     }
 
     let expected = (time * BPM / 60.0) as u32;

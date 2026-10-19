@@ -3,7 +3,6 @@
 
 use egui::{Align2, Color32, CornerRadius, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 
-use crate::gpu::SCENE_NAMES;
 use crate::media::{TrackInfo, ART_SIZE};
 use crate::palette::{Palette, PRESETS};
 use crate::settings::{Settings, UiTheme, WindowMode};
@@ -13,17 +12,14 @@ use crate::vis::VisState;
 const SIDEBAR_W: f32 = 224.0;
 const RAIL_W: f32 = 56.0;
 const DRAWER_W: f32 = 300.0;
-const SCENE_KEYS: [&str; 11] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-"];
 
 pub enum UiAction {
     SetMode(WindowMode),
-    Scene(usize),
     HideSidebar,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    Scenes,
     Visuals,
     Audio,
     Palette,
@@ -32,8 +28,7 @@ pub enum Section {
     Hotkeys,
 }
 
-const SECTIONS: [(Section, &str, Icon); 7] = [
-    (Section::Scenes, "Scenes", Icon::Scenes),
+const SECTIONS: [(Section, &str, Icon); 6] = [
     (Section::Visuals, "Visuals", Icon::Visuals),
     (Section::Audio, "Audio", Icon::Audio),
     (Section::Palette, "Palette", Icon::Palette),
@@ -121,7 +116,6 @@ pub struct UiCtx<'a> {
     pub track: &'a TrackInfo,
     pub vis: &'a VisState,
     pub palette: Palette,
-    pub scene: usize,
     pub mode: WindowMode,
     pub stats: &'a ProcStats,
     pub fps: f32,
@@ -132,7 +126,7 @@ pub struct UiCtx<'a> {
     pub transparent_ok: bool,
     pub show_sidebar: bool,
     pub toast_alpha: f32,
-    /// Opacity of the on-scene scene switcher and window buttons (fades after the mouse rests).
+    /// Opacity of the on-scene window buttons (fades after the mouse rests).
     pub controls_alpha: f32,
 }
 
@@ -270,8 +264,7 @@ impl UiState {
         if c.toast_alpha > 0.0 && c.settings.show_track_toast && !c.track.title.is_empty() {
             egui::Area::new(egui::Id::new("toast"))
                 .pivot(Align2::LEFT_BOTTOM)
-                // Rises above the scene switcher while that is showing.
-                .fixed_pos(scene_rect.left_bottom() + egui::vec2(26.0, -26.0 - 48.0 * c.controls_alpha))
+                .fixed_pos(scene_rect.left_bottom() + egui::vec2(26.0, -26.0))
                 .interactable(false)
                 .show(ctx, |ui| {
                     ui.multiply_opacity(c.toast_alpha);
@@ -300,7 +293,7 @@ impl UiState {
         }
 
         if c.controls_alpha > 0.0 {
-            scene_controls(ctx, scene_rect, &c, &t, &mut actions);
+            window_buttons(ctx, scene_rect, &c, &t, &mut actions);
         }
 
         (actions, scene_rect)
@@ -411,25 +404,6 @@ impl UiState {
             ui.spacing_mut().slider_width = ui.available_width() - 64.0;
             let s = &mut *c.settings;
             match sec {
-                Section::Scenes => {
-                    let w = (ui.available_width() - 6.0) / 2.0;
-                    egui::Grid::new("scenes").num_columns(2).spacing([6.0, 6.0]).show(ui, |ui| {
-                        for (i, name) in SCENE_NAMES.iter().enumerate() {
-                            let label = RichText::new(format!("{}  {name}", SCENE_KEYS[i]));
-                            if ui.add_sized([w, 30.0], egui::Button::new(label).selected(c.scene == i)).clicked() {
-                                actions.push(UiAction::Scene(i));
-                            }
-                            if i % 2 == 1 {
-                                ui.end_row();
-                            }
-                        }
-                    });
-                    ui.add_space(8.0);
-                    ui.checkbox(&mut s.auto_cycle, "Auto-cycle scenes (on the beat)");
-                    ui.add_enabled_ui(s.auto_cycle, |ui| labeled(ui, t, "Cycle time", egui::Slider::new(&mut s.cycle_seconds, 10.0..=180.0).suffix(" s")));
-                    ui.checkbox(&mut s.switch_on_drop, "Switch scene on drops");
-                    labeled(ui, t, "Crossfade", egui::Slider::new(&mut s.transition_seconds, 0.3..=6.0).suffix(" s"));
-                }
                 Section::Visuals => {
                     labeled(ui, t, "Intensity", egui::Slider::new(&mut s.intensity, 0.2..=2.0));
                     labeled(ui, t, "Bloom", egui::Slider::new(&mut s.bloom_strength, 0.0..=3.0));
@@ -438,8 +412,6 @@ impl UiState {
                     labeled(ui, t, "Chromatic", egui::Slider::new(&mut s.chromatic, 0.0..=2.0));
                     labeled(ui, t, "Film grain", egui::Slider::new(&mut s.grain, 0.0..=1.5));
                     labeled(ui, t, "Vignette", egui::Slider::new(&mut s.vignette, 0.0..=1.0));
-                    labeled(ui, t, "Particle trails", egui::Slider::new(&mut s.trails, 0.0..=0.95));
-                    labeled(ui, t, "Particle density", egui::Slider::new(&mut s.particle_fraction, 0.1..=1.0));
                     labeled(ui, t, "Render scale", egui::Slider::new(&mut s.render_scale, 0.5..=1.0));
                 }
                 Section::Audio => {
@@ -517,15 +489,13 @@ impl UiState {
                         }
                     });
                     ui.add_space(6.0);
-                    ui.label(RichText::new("Changes the app's panels and controls. Scenes keep their own colours.").small().color(t.faint));
+                    ui.label(RichText::new("Changes the app's panels and controls. The visualizer keeps its own colours.").small().color(t.faint));
                 }
                 Section::Hotkeys => {
-                    let rows: [(&str, &[&str]); 8] = [
+                    let rows: [(&str, &[&str]); 6] = [
                         ("Sidebar", &["F1", "Tab"]),
                         ("Fullscreen", &["F11", "Alt+Enter"]),
                         ("Overlay mode", &["O"]),
-                        ("Previous / next scene", &["←", "→"]),
-                        ("Jump to scene", &["1–9", "0", "-"]),
                         ("Show now playing", &["T"]),
                         ("Performance stats", &["F3"]),
                         ("Back / close", &["Esc"]),
@@ -537,8 +507,7 @@ impl UiState {
                     ui.add_space(10.0);
                     ui.label(RichText::new("Global (work from any app, and in overlay)").small().strong().color(t.dim));
                     ui.add_space(2.0);
-                    let global: [(&str, &[&str]); 3] =
-                        [("Overlay mode", &["Ctrl+Alt+O"]), ("Sidebar", &["Ctrl+Alt+S"]), ("Next scene", &["Ctrl+Alt+N"])];
+                    let global: [(&str, &[&str]); 2] = [("Overlay mode", &["Ctrl+Alt+O"]), ("Sidebar", &["Ctrl+Alt+S"])];
                     for (d, keys) in global {
                         key_row(ui, t, d, keys);
                     }
@@ -548,31 +517,13 @@ impl UiState {
     }
 }
 
-/// Scene switcher pill (bottom centre) and fullscreen / overlay buttons (top right) over the scene.
-fn scene_controls(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens, actions: &mut Vec<UiAction>) {
+/// Fullscreen / overlay buttons over the top-right corner of the scene.
+fn window_buttons(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens, actions: &mut Vec<UiAction>) {
     let frame = egui::Frame::new()
         .fill(t.float)
         .stroke(Stroke::new(1.0_f32, t.border))
         .corner_radius(CornerRadius::same(18))
         .inner_margin(Margin::symmetric(6, 4));
-
-    egui::Area::new(egui::Id::new("scene-switch"))
-        .pivot(Align2::CENTER_BOTTOM)
-        .fixed_pos(scene.center_bottom() - egui::vec2(0.0, 16.0))
-        .show(ctx, |ui| {
-            ui.multiply_opacity(c.controls_alpha);
-            frame.show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if icon_button(ui, t, Icon::Prev, 26.0).on_hover_text("Previous scene (←)").clicked() {
-                        actions.push(UiAction::Scene(c.scene + SCENE_NAMES.len() - 1));
-                    }
-                    ui.add_sized([96.0, 26.0], egui::Label::new(RichText::new(SCENE_NAMES[c.scene]).color(t.text)));
-                    if icon_button(ui, t, Icon::Next, 26.0).on_hover_text("Next scene (→)").clicked() {
-                        actions.push(UiAction::Scene(c.scene + 1));
-                    }
-                });
-            });
-        });
 
     egui::Area::new(egui::Id::new("window-buttons"))
         .pivot(Align2::RIGHT_TOP)
@@ -684,7 +635,6 @@ fn theme_card(ui: &mut egui::Ui, t: &Tokens, theme: UiTheme, name: &str, selecte
 #[derive(Clone, Copy)]
 enum Icon {
     Logo,
-    Scenes,
     Visuals,
     Audio,
     Palette,
@@ -694,8 +644,6 @@ enum Icon {
     Collapse,
     Expand,
     Close,
-    Prev,
-    Next,
     Fullscreen,
     Overlay,
 }
@@ -717,11 +665,6 @@ fn paint_icon(p: &egui::Painter, icon: Icon, c: Pos2, col: Color32) {
                 let d = v(a.cos(), a.sin());
                 let len = if i % 2 == 0 { 4.0 } else { 2.5 };
                 p.line_segment([c + d * 6.0, c + d * (6.0 + len)], Stroke::new(1.8_f32, col));
-            }
-        }
-        Icon::Scenes => {
-            for (x, y) in [(-4.0, -4.0), (4.0, -4.0), (-4.0, 4.0), (4.0, 4.0)] {
-                p.rect_stroke(Rect::from_center_size(c + v(x, y), Vec2::splat(6.0)), CornerRadius::same(2), s, StrokeKind::Middle);
             }
         }
         Icon::Visuals => {
@@ -774,8 +717,6 @@ fn paint_icon(p: &egui::Painter, icon: Icon, c: Pos2, col: Color32) {
             line(v(-4.5, -4.5), v(4.5, 4.5));
             line(v(-4.5, 4.5), v(4.5, -4.5));
         }
-        Icon::Prev => chevron(0.0, 1.0),
-        Icon::Next => chevron(0.0, -1.0),
         Icon::Fullscreen => {
             for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                 line(v(6.0 * sx, 6.0 * sy), v(2.0 * sx, 6.0 * sy));

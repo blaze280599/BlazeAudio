@@ -1,31 +1,12 @@
-// Post: scene crossfade, physically-based bloom (Jimenez 13-tap down / tent up), ACES.
+// Post: physically-based bloom (Jimenez 13-tap down / tent up), ACES.
 
 @group(1) @binding(0) var tex_a: texture_2d<f32>;
 @group(1) @binding(1) var tex_b: texture_2d<f32>;
 
-// A single NaN/inf pixel from any scene would be smeared into black blocks by the bloom
+// A single NaN/inf pixel from the scene would be smeared into black blocks by the bloom
 // chain. D3D min/max return the non-NaN operand, so this clamp scrubs both.
 fn sanitize(c: vec3f) -> vec3f {
   return min(max(c, vec3f(0.0)), vec3f(1000.0));
-}
-
-// ---- Crossfade: noisy radial dissolve with a glowing seam ----
-@fragment
-fn fs_composite(in: VsOut) -> @location(0) vec4f {
-  let a = sanitize(textureSampleLevel(tex_a, samp_clamp, in.uv, 0.0).rgb);
-  let t = G.transition;
-  if (t >= 1.0) {
-    return vec4f(a, 1.0);
-  }
-  let b = sanitize(textureSampleLevel(tex_b, samp_clamp, in.uv, 0.0).rgb);
-  let p = aspect_uv(in.uv);
-  let n = fbm(p * 2.2 + G.time * 0.25);
-  let rr = length(p) * 0.55 + (n - 0.5) * 0.45;
-  let e = t * 1.95 - 0.3;
-  let m = 1.0 - smoothstep(e - 0.05, e + 0.05, rr);
-  let seam = exp(-abs(rr - e) * 26.0) * sin(t * PI);
-  let col = mix(b, a, m) + mix(pal(0), vec3f(1.0), 0.35) * seam * 2.2;
-  return vec4f(col, 1.0);
 }
 
 // ---- Bloom ----
@@ -37,7 +18,7 @@ fn karis(c: vec3f) -> f32 {
   return 1.0 / (1.0 + luma(c));
 }
 
-// The first level may read a scene target directly (no composite pass), so scrub its taps.
+// The first level reads the scene target directly, so scrub its taps.
 fn tap(uv: vec2f, o: vec2f, ts: vec2f, first: bool) -> vec3f {
   let c = s(uv, o, ts);
   return select(c, sanitize(c), first);

@@ -14,23 +14,22 @@ const VK_MENU: i32 = 0x12;
 pub enum GlobalKey {
     ToggleOverlay,
     ToggleSettings,
-    NextScene,
 }
 
-/// Polls Ctrl+Alt+{O,S,N} regardless of focus — needed because the overlay is click-through.
+/// Polls Ctrl+Alt+{O,S} regardless of focus — needed because the overlay is click-through.
 pub struct GlobalHotkeys {
-    prev: [bool; 3],
+    prev: [bool; 2],
 }
 
 impl GlobalHotkeys {
     pub fn new() -> Self {
-        Self { prev: [false; 3] }
+        Self { prev: [false; 2] }
     }
 
     pub fn poll(&mut self) -> Option<GlobalKey> {
         let down = |vk: i32| unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 };
         let mods = down(VK_CONTROL) && down(VK_MENU);
-        let keys = [(b'O', GlobalKey::ToggleOverlay), (b'S', GlobalKey::ToggleSettings), (b'N', GlobalKey::NextScene)];
+        let keys = [(b'O', GlobalKey::ToggleOverlay), (b'S', GlobalKey::ToggleSettings)];
         let mut fired = None;
         for (i, (vk, k)) in keys.iter().enumerate() {
             let now = mods && down(*vk as i32);
