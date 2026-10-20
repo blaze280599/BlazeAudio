@@ -9,9 +9,21 @@ Everything ships as one portable `blazeaudio.exe`. There's nothing to install an
 - Windows 10 (version 1809 or later) or 11
 - A DirectX 12 capable GPU
 
+## Download
+
+1. Download **[blazeaudio.exe](https://github.com/blaze280599/BlazeAudio/releases/latest/download/blazeaudio.exe)** from the [latest release](https://github.com/blaze280599/BlazeAudio/releases/latest).
+2. Put it in a folder you can write to, such as Documents, your Desktop or a USB stick. Avoid `Program Files`: the app updates by replacing its own exe, which it can't do there.
+3. Double-click it. The exe isn't code-signed, so the first time Windows SmartScreen may say it "protected your PC". Click **More info**, then **Run anyway**. Updates the app installs itself don't ask again.
+
+To check the download, compare its hash with `blazeaudio.exe.sha256` on the release page. In PowerShell, run `Get-FileHash blazeaudio.exe` in the folder you saved it to.
+
+**Updates:** by default the app checks GitHub when it starts and installs a new version in the background, which runs from the next start. **General → Updates** can switch that to just notifying you, or off.
+
+**Uninstalling:** delete `blazeaudio.exe`, and `%APPDATA%\BlazeAudio` if you also want your settings gone.
+
 ## Getting started
 
-1. Download `blazeaudio.exe` from the [latest release](https://github.com/blaze280599/BlazeAudio/releases/latest), put it in any folder you can write to (Documents, a USB stick, wherever), and run it. The exe isn't code-signed, so the first time Windows SmartScreen may say it "protected your PC": click **More info**, then **Run anyway**.
+1. Run `blazeaudio.exe`.
 2. Play music. BlazeAudio visualizes everything your default output device plays.
 3. If the music app reports what's playing to Windows (Spotify does), you'll see the title, artist and cover, and the visuals take on the cover's colours.
 
