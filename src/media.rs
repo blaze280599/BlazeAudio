@@ -59,7 +59,6 @@ pub struct TrackInfo {
     pub title: String,
     pub artist: String,
     pub album: String,
-    pub source: String,
     pub playback: Playback,
     /// ART_SIZE x ART_SIZE sRGB RGBA8.
     pub art: Option<Arc<Vec<u8>>>,
@@ -277,7 +276,6 @@ fn watch_loop(shared: &Shared, cmds: &Receiver<MediaCmd>) {
                 }
                 let props = session.TryGetMediaPropertiesAsync().ok().and_then(|op| op.join().ok());
                 let playback = read_playback(&session);
-                let source = hs(session.SourceAppUserModelId());
                 if let Some(props) = props {
                     let title = hs(props.Title());
                     let artist = hs(props.Artist());
@@ -312,7 +310,6 @@ fn watch_loop(shared: &Shared, cmds: &Receiver<MediaCmd>) {
                 }
                 let mut i = shared.info.lock().unwrap();
                 i.playback = playback;
-                i.source = source;
             }
             None => {
                 // Nothing to send it to; don't let it fire when a session turns up later.

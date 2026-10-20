@@ -34,19 +34,13 @@ pub struct AudioParams {
 pub struct AudioFrame {
     pub bands: [f32; NUM_BANDS],
     pub wave: [f32; WAVE_LEN],
-    pub bass: f32,
-    pub mid: f32,
     pub treble: f32,
     pub energy: f32,
-    /// Beat envelope: 1.0 on a detected beat, decays exponentially.
-    pub beat: f32,
     pub beat_strength: f32,
     pub beat_count: u32,
     /// High-frequency onset envelope (hi-hats / snares).
     pub hat: f32,
-    pub flux: f32,
     pub bpm: f32,
-    pub drop_count: u32,
     pub level: f32,
     pub updated: Option<Instant>,
 }
@@ -56,17 +50,12 @@ impl Default for AudioFrame {
         Self {
             bands: [0.0; NUM_BANDS],
             wave: [0.0; WAVE_LEN],
-            bass: 0.0,
-            mid: 0.0,
             treble: 0.0,
             energy: 0.0,
-            beat: 0.0,
             beat_strength: 0.0,
             beat_count: 0,
             hat: 0.0,
-            flux: 0.0,
             bpm: 0.0,
-            drop_count: 0,
             level: 0.0,
             updated: None,
         }
@@ -271,7 +260,6 @@ struct Analyzer {
     above: bool,
     last_beat: f64,
     last_hat: f64,
-    beat: f32,
     beat_strength: f32,
     beat_count: u32,
     hat: f32,
@@ -282,13 +270,8 @@ struct Analyzer {
     bpm_candidate: f32,
     bpm: f32,
 
-    energy_short: f32,
-    energy_long: f32,
-    last_drop: f64,
-    drop_count: u32,
     rms_long: f32,
     pub trace: Option<Vec<(f32, f32, f32)>>,
-    flux_smooth: f32,
 }
 
 impl Analyzer {
@@ -361,7 +344,6 @@ impl Analyzer {
             above: false,
             last_beat: -10.0,
             last_hat: -10.0,
-            beat: 0.0,
             beat_strength: 0.0,
             beat_count: 0,
             hat: 0.0,
@@ -371,13 +353,8 @@ impl Analyzer {
             acf: Vec::new(),
             bpm_candidate: 0.0,
             bpm: 0.0,
-            energy_short: 0.0,
-            energy_long: 0.0,
-            last_drop: -100.0,
-            drop_count: 0,
             rms_long: 0.0,
             trace: None,
-            flux_smooth: 0.0,
         }
     }
 
@@ -529,8 +506,6 @@ impl Analyzer {
             cls_sum[c] += self.bands[b];
             cls_n[c] += 1.0;
         }
-        let bass = cls_sum[0] / cls_n[0].max(1.0);
-        let mid = cls_sum[1] / cls_n[1].max(1.0);
         let treble = cls_sum[2] / cls_n[2].max(1.0);
         let energy = self.bands.iter().sum::<f32>() / NUM_BANDS as f32;
 
@@ -607,12 +582,10 @@ impl Analyzer {
         let refractory = if self.bpm > 0.0 { (36.0 / self.bpm as f64).max(0.17) } else { 0.17 };
         if is_above && !self.above && self.time - self.last_beat > refractory {
             self.last_beat = self.time;
-            self.beat = 1.0;
             self.beat_strength = ((onset - mean) / (std * 4.0 + 1e-4)).clamp(0.25, 1.0);
             self.beat_count = self.beat_count.wrapping_add(1);
         }
         self.above = is_above;
-        self.beat *= (-dt / 0.16).exp();
 
         if hi > hmean + hstd * 2.2 && hi > 0.002 && self.time - self.last_hat > 0.07 {
             self.last_hat = self.time;
@@ -620,19 +593,7 @@ impl Analyzer {
         }
         self.hat *= (-dt / 0.09).exp();
 
-        // ---- Drop detection: short-term energy jumping well above the long-term average ----
-        self.energy_short += (energy - self.energy_short) * (1.0 - (-dt / 0.35).exp());
-        self.energy_long += (energy - self.energy_long) * (1.0 - (-dt / 8.0).exp());
-        if self.energy_short > self.energy_long * 1.45
-            && self.energy_short > 0.32
-            && self.time - self.last_drop > 12.0
-        {
-            self.last_drop = self.time;
-            self.drop_count = self.drop_count.wrapping_add(1);
-        }
-
         self.rms_long += (rms - self.rms_long) * (1.0 - (-dt / 1.5).exp());
-        self.flux_smooth += (onset - self.flux_smooth) * (1.0 - (-dt / 0.05).exp());
 
         // ---- Publish ----
         let gain = (0.3 / self.rms_long.max(1e-3)).min(40.0);
@@ -645,17 +606,12 @@ impl Analyzer {
             // Loose clamp only; the scope soft-clips, so peaks round off instead of flattening.
             f.wave[i] = ((self.ring[(start + i) % FFT_SIZE] - mean) * gain).clamp(-4.0, 4.0);
         }
-        f.bass = bass;
-        f.mid = mid;
         f.treble = treble;
         f.energy = energy;
-        f.beat = self.beat;
         f.beat_strength = self.beat_strength;
         f.beat_count = self.beat_count;
         f.hat = self.hat;
-        f.flux = (self.flux_smooth / (mean + std * 3.0 + 1e-3)).clamp(0.0, 1.0);
         f.bpm = self.bpm;
-        f.drop_count = self.drop_count;
         f.level = rms;
         f.updated = Some(Instant::now());
     }
