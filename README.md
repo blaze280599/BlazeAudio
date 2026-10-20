@@ -4,6 +4,8 @@ An HDR music visualizer for Windows. It listens to whatever your PC is playing (
 
 Everything ships as one portable `blazeaudio.exe`. There's nothing to install and no account to sign into. The only time it goes online is to check GitHub for a new version, which you can turn off.
 
+![BlazeAudio in a window, showing Crystalized Ball with the sidebar and now-playing card](docs/media/app.webp)
+
 ## Requirements
 
 - Windows 10 (version 1809 or later) or 11
@@ -30,6 +32,19 @@ To check the download, compare its hash with `blazeaudio.exe.sha256` on the rele
 Settings live in the sidebar on the left. Press `F1` to show or hide it.
 
 ## Scenes
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/terminal.webp" alt="Faulty Terminal"><br><b>1 · Faulty Terminal</b></td>
+    <td width="50%"><img src="docs/media/ascii.webp" alt="Gradient ASCII"><br><b>2 · Gradient ASCII</b></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/scope.webp" alt="Phosphor Scope"><br><b>3 · Phosphor Scope</b> (polar mode)</td>
+    <td width="50%"><img src="docs/media/ball.webp" alt="Crystalized Ball"><br><b>4 · Crystalized Ball</b></td>
+  </tr>
+</table>
+
+Recorded live while playing music; the colours come from the track's album art.
 
 | | Scene | What it looks like |
 |---|---|---|

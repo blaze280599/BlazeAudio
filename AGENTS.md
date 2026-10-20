@@ -379,7 +379,7 @@ From those, everything else updates automatically: sidebar buttons, number keys 
 - time 150 frames and append `render (<name>): … ms/frame` to the report
 - capture one PNG per mode or shape
 
-**5. Docs** – in `README.md`, add the scene to the scene list and the `1` / `2` / `3` row of the Controls table. Update §1 of this file (the list of current scenes).
+**5. Docs** – in `README.md`, add the scene to the scene list and the `1` / `2` / `3` row of the Controls table. Update §1 of this file (the list of current scenes). The README's scene gallery uses animated WebP clips in `docs/media/` (about 4.5 s, 800 px wide, 2 MB or less), recorded from the running app with ffmpeg's `ddagrab`; add one for the new scene.
 
 **6. Verify** – `cargo clippy --all-targets` (no new warnings in your files), `cargo test`, then the snapshot. Look at the new PNGs, and byte-compare the existing ones against the previous build; they must not change. Check the ms/frame for the new scene: about 1.2 ms at 1280×720 is typical, and much more than that needs a reason.
 
