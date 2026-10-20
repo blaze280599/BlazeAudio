@@ -25,9 +25,9 @@ use winit::window::{Fullscreen, Icon, Window, WindowId, WindowLevel};
 
 use audio::{AudioEngine, AudioParams};
 use gpu::Gpu;
-use media::{MediaWatcher, TrackInfo};
+use media::{MediaCmd, MediaWatcher, TrackInfo};
 use palette::PRESETS;
-use settings::{Scene, Settings, WindowMode};
+use settings::{AutoScene, Scene, Settings, WindowGeom, WindowMode};
 use vis::VisState;
 
 pub fn make_instance() -> wgpu::Instance {
@@ -62,6 +62,32 @@ fn fatal(msg: &str) {
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
     unsafe {
         MessageBoxW(None, &HSTRING::from(msg), &HSTRING::from("BlazeAudio"), MB_OK | MB_ICONERROR);
+    }
+}
+
+/// Window class, so a second launch can find the running window whatever its title says.
+const WINDOW_CLASS: &str = "BlazeAudio";
+
+/// True when another BlazeAudio is already running; that one is brought to the front. Two
+/// copies would fight over the global hotkeys and the settings file.
+fn already_running() -> bool {
+    use windows::core::{w, HSTRING};
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::CreateMutexW;
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE};
+    unsafe {
+        // Held (never closed) for the life of the process.
+        let Ok(_mutex) = CreateMutexW(None, false, w!("Local\\BlazeAudio.SingleInstance")) else { return false };
+        if GetLastError() != ERROR_ALREADY_EXISTS {
+            return false;
+        }
+        if let Ok(hwnd) = FindWindowW(&HSTRING::from(WINDOW_CLASS), None) {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+            let _ = SetForegroundWindow(hwnd);
+        }
+        true
     }
 }
 
@@ -123,6 +149,8 @@ struct App {
     volume: volume::Volume,
     /// Seconds left of the volume bar flashing up after a volume key.
     volume_flash: f32,
+    /// Seconds the current scene has been on screen with music playing (for the scene timer).
+    scene_clock: f32,
 
     hotkeys: sys::GlobalHotkeys,
     stats: sys::ProcStats,
@@ -169,6 +197,7 @@ impl App {
             toast_t: 0.0,
             volume: volume::Volume::new(),
             volume_flash: 0.0,
+            scene_clock: 0.0,
             hotkeys: sys::GlobalHotkeys::new(),
             stats: sys::ProcStats::new(),
             trim_at: Some(now + Duration::from_secs(4)),
@@ -255,6 +284,35 @@ impl App {
         self.trim_at = Some(Instant::now() + Duration::from_secs(3));
     }
 
+    /// Records where the windowed-mode window is, so the next launch opens in the same place.
+    fn remember_window(&mut self) {
+        let Some(g) = &self.gfx else { return };
+        let w = &g.window;
+        let prev = self.settings.window;
+        let rect = match self.mode {
+            WindowMode::Windowed if w.is_minimized() == Some(true) => return,
+            // A maximized window's rect is the whole monitor; keep the restored rect from
+            // before and only note that it was maximized.
+            WindowMode::Windowed if w.is_maximized() => {
+                let cur = w.outer_position().ok().map(|p| WindowGeom { x: p.x, y: p.y, w: w.inner_size().width, h: w.inner_size().height, maximized: true });
+                self.settings.window = prev.map(|p| WindowGeom { maximized: true, ..p }).or(cur);
+                return;
+            }
+            WindowMode::Windowed => w.outer_position().ok().map(|p| (p, w.inner_size())),
+            _ => self.windowed_rect,
+        };
+        if let Some((pos, size)) = rect {
+            let maximized = self.mode != WindowMode::Windowed && prev.is_some_and(|p| p.maximized);
+            self.settings.window = Some(WindowGeom { x: pos.x, y: pos.y, w: size.width, h: size.height, maximized });
+        }
+    }
+
+    fn media(&mut self, cmd: MediaCmd) {
+        self.media.send(cmd);
+        // Show the card so there's feedback for a key press, even with the sidebar hidden.
+        self.toast_t = 6.0;
+    }
+
     fn toggle_mode(&mut self, m: WindowMode) {
         let target = if self.mode == m { WindowMode::Windowed } else { m };
         self.apply_mode(target);
@@ -262,6 +320,11 @@ impl App {
 
     fn handle_key(&mut self, code: KeyCode) {
         let alt = self.modifiers.alt_key();
+        // Single-key shortcuts only. Ctrl+Alt+O / S are the global hotkeys, polled separately;
+        // letting them through here too would toggle twice and cancel out.
+        if self.modifiers.control_key() || (alt && code != KeyCode::Enter) {
+            return;
+        }
         match code {
             KeyCode::F1 | KeyCode::Tab => self.set_sidebar_visible(!self.show_sidebar),
             KeyCode::F11 | KeyCode::KeyF => self.toggle_mode(WindowMode::Fullscreen),
@@ -279,6 +342,10 @@ impl App {
                 self.volume_flash = 1.6;
             }
             KeyCode::KeyT => self.toast_t = 6.0,
+            KeyCode::Space => self.media(MediaCmd::PlayPause),
+            KeyCode::KeyN => self.media(MediaCmd::Next),
+            KeyCode::KeyP => self.media(MediaCmd::Previous),
+            KeyCode::KeyS => self.settings.visual = self.settings.visual.next(),
             KeyCode::F3 => self.settings.show_stats = !self.settings.show_stats,
             KeyCode::Escape => {
                 if self.ui.drawer.is_some() {
@@ -310,9 +377,24 @@ impl App {
             let new_art = av != self.art_ver;
             self.track_ver = tv;
             self.art_ver = av;
+            let had_track = !self.track.title.is_empty();
             self.track = self.media.snapshot();
-            if new_track && !self.track.title.is_empty() {
-                self.toast_t = 6.0;
+            if new_track {
+                let t = &self.track;
+                if !t.title.is_empty() {
+                    self.toast_t = 6.0;
+                    // Not for the first track seen, so launching the app doesn't skip a scene.
+                    if had_track && self.settings.auto_scene == AutoScene::Track {
+                        self.settings.visual = self.settings.visual.next();
+                    }
+                }
+                if let Some(g) = &self.gfx {
+                    g.window.set_title(&match (t.title.is_empty(), t.artist.is_empty()) {
+                        (true, _) => "BlazeAudio".to_owned(),
+                        (false, true) => format!("{} · BlazeAudio", t.title),
+                        (false, false) => format!("{} – {} · BlazeAudio", t.title, t.artist),
+                    });
+                }
             }
             if new_art {
                 if let Some(g) = &mut self.gfx {
@@ -320,6 +402,7 @@ impl App {
                 }
             }
         }
+        self.track.playback = self.media.playback();
         self.vis.pal_target = match (&self.track.palette, self.settings.album_palette) {
             (Some(p), true) => *p,
             _ => PRESETS[self.settings.preset_palette.min(PRESETS.len() - 1)].1,
@@ -400,9 +483,17 @@ impl App {
         g.gpu.set_viewport(vx as u32, vy as u32, vw.max(0.0) as u32, vh.max(0.0) as u32);
 
         g.gpu.set_render_scale(self.settings.render_scale);
+        // The scene timer only runs while music plays, so a paused track holds the scene.
+        if self.vis.silent_for < 1.0 {
+            self.scene_clock += dt;
+        }
+        if self.settings.auto_scene == AutoScene::Timer && self.scene_clock >= self.settings.auto_scene_minutes * 60.0 {
+            self.settings.visual = self.settings.visual.next();
+        }
         if g.gpu.scene != self.settings.visual {
             g.gpu.scene = self.settings.visual;
             self.vis.scene_time = 0.0;
+            self.scene_clock = 0.0;
         }
         let overlay = self.mode == WindowMode::Overlay && g.gpu.transparent_ok;
         let globals = self.vis.globals(&self.settings, g.gpu.scene_size(), time, overlay);
@@ -465,6 +556,7 @@ impl App {
             match a {
                 ui::UiAction::SetMode(m) => self.apply_mode(m),
                 ui::UiAction::HideSidebar => self.set_sidebar_visible(false),
+                ui::UiAction::Media(cmd) => self.media.send(cmd),
             }
         }
         self.update_hittest();
@@ -498,13 +590,28 @@ impl ApplicationHandler for App {
         if self.gfx.is_some() {
             return;
         }
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title("BlazeAudio")
             .with_inner_size(LogicalSize::new(1280.0, 720.0))
             .with_min_inner_size(LogicalSize::new(320.0, 200.0))
             .with_window_icon(app_icon())
             .with_taskbar_icon(app_icon())
+            .with_class_name(WINDOW_CLASS)
             .with_no_redirection_bitmap(true);
+        // Reopen where it was, as long as its title bar is still on a connected monitor.
+        if let Some(gm) = self.settings.window {
+            let (tx, ty) = (gm.x + gm.w as i32 / 2, gm.y + 16);
+            let visible = el.available_monitors().any(|m| {
+                let (p, s) = (m.position(), m.size());
+                tx >= p.x && tx < p.x + s.width as i32 && ty >= p.y && ty < p.y + s.height as i32
+            });
+            if visible && gm.w >= 320 && gm.h >= 200 {
+                attrs = attrs
+                    .with_position(PhysicalPosition::new(gm.x, gm.y))
+                    .with_inner_size(PhysicalSize::new(gm.w, gm.h))
+                    .with_maximized(gm.maximized);
+            }
+        }
         let window = match el.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -571,6 +678,7 @@ impl ApplicationHandler for App {
         }
         match event {
             WindowEvent::CloseRequested => {
+                self.remember_window();
                 self.settings.save();
                 el.exit();
             }
@@ -645,6 +753,9 @@ fn main() {
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
         let dir = args.get(i + 1).cloned().unwrap_or_else(|| "snapshots".into());
         snapshot::run(std::path::Path::new(&dir));
+        return;
+    }
+    if already_running() {
         return;
     }
     let event_loop = match EventLoop::new() {

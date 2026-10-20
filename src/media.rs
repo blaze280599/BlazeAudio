@@ -2,8 +2,9 @@
 //! Prefers a Spotify session when several apps are publishing media sessions.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::HSTRING;
 use windows::Media::Control::{
@@ -19,13 +20,44 @@ use crate::palette::{self, Palette};
 
 pub const ART_SIZE: u32 = 256;
 
+/// A transport command for the media session on screen.
+#[derive(Clone, Copy)]
+pub enum MediaCmd {
+    PlayPause,
+    Next,
+    Previous,
+}
+
+/// Play state and timeline. Changes every second or so, so it's read every frame instead of
+/// riding on the track/art versions.
+#[derive(Clone, Copy, Default)]
+pub struct Playback {
+    pub playing: bool,
+    pub can_play_pause: bool,
+    pub can_next: bool,
+    pub can_previous: bool,
+    /// Seconds into the track when `at` was taken.
+    pub position: f32,
+    /// Track length in seconds; 0 when the app doesn't report a timeline.
+    pub duration: f32,
+    pub at: Option<Instant>,
+}
+
+impl Playback {
+    /// Position now, carried forward from the last reading while playing.
+    pub fn position_now(&self) -> f32 {
+        let run = if self.playing { self.at.map_or(0.0, |t| t.elapsed().as_secs_f32()) } else { 0.0 };
+        (self.position + run).clamp(0.0, self.duration.max(0.0))
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct TrackInfo {
     pub title: String,
     pub artist: String,
     pub album: String,
     pub source: String,
-    pub playing: bool,
+    pub playback: Playback,
     /// ART_SIZE x ART_SIZE sRGB RGBA8.
     pub art: Option<Arc<Vec<u8>>>,
     pub palette: Option<Palette>,
@@ -42,6 +74,7 @@ struct Shared {
 
 pub struct MediaWatcher {
     shared: Arc<Shared>,
+    cmds: Sender<MediaCmd>,
 }
 
 impl MediaWatcher {
@@ -51,6 +84,7 @@ impl MediaWatcher {
             stop: AtomicBool::new(false),
         });
         let s = shared.clone();
+        let (cmds, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("media-session".into())
             .stack_size(512 * 1024)
@@ -58,10 +92,19 @@ impl MediaWatcher {
                 unsafe {
                     let _ = RoInitialize(RO_INIT_MULTITHREADED);
                 }
-                watch_loop(&s);
+                watch_loop(&s, &rx);
             })
             .expect("spawn media thread");
-        Self { shared }
+        Self { shared, cmds }
+    }
+
+    /// Asks the media session to play/pause or skip. Handled on the media thread.
+    pub fn send(&self, cmd: MediaCmd) {
+        let _ = self.cmds.send(cmd);
+    }
+
+    pub fn playback(&self) -> Playback {
+        self.shared.info.lock().unwrap().playback
     }
 
     pub fn snapshot(&self) -> TrackInfo {
@@ -124,12 +167,60 @@ fn hs(r: windows::core::Result<HSTRING>) -> String {
     r.map(|h| h.to_string()).unwrap_or_default()
 }
 
-fn watch_loop(shared: &Shared) {
+/// Play state, available controls and timeline of a session.
+fn read_playback(session: &Session) -> Playback {
+    let mut pb = Playback { at: Some(Instant::now()), ..Playback::default() };
+    if let Ok(info) = session.GetPlaybackInfo() {
+        pb.playing = info.PlaybackStatus().is_ok_and(|s| s == PlaybackStatus::Playing);
+        if let Ok(c) = info.Controls() {
+            pb.can_play_pause = c.IsPlayPauseToggleEnabled().unwrap_or(false);
+            pb.can_next = c.IsNextEnabled().unwrap_or(false);
+            pb.can_previous = c.IsPreviousEnabled().unwrap_or(false);
+        }
+    }
+    if let Ok(tl) = session.GetTimelineProperties() {
+        let secs = |d: windows::core::Result<windows::Foundation::TimeSpan>| d.map_or(0.0, |d| d.Duration as f64 * 1e-7);
+        let (start, end) = (secs(tl.StartTime()), secs(tl.EndTime()));
+        let mut pos = secs(tl.Position()) - start;
+        // The app reports the position as of its last update (Spotify only on play/pause and
+        // seeks), so carry it forward to now while playing.
+        if pb.playing {
+            if let (Ok(updated), Ok(now)) = (tl.LastUpdatedTime(), SystemTime::now().duration_since(UNIX_EPOCH)) {
+                // DateTime counts 100 ns ticks from 1601; the Unix epoch is 11644473600 s later.
+                let updated = updated.UniversalTime as f64 * 1e-7 - 11_644_473_600.0;
+                let since = now.as_secs_f64() - updated;
+                if updated > 0.0 && (0.0..86_400.0).contains(&since) {
+                    pos += since;
+                }
+            }
+        }
+        let duration = end - start;
+        if duration > 1.0 {
+            pb.duration = duration as f32;
+            pb.position = pos.clamp(0.0, duration) as f32;
+        }
+    }
+    pb
+}
+
+fn run_cmd(session: &Session, cmd: MediaCmd) {
+    let op = match cmd {
+        MediaCmd::PlayPause => session.TryTogglePlayPauseAsync(),
+        MediaCmd::Next => session.TrySkipNextAsync(),
+        MediaCmd::Previous => session.TrySkipPreviousAsync(),
+    };
+    let _ = op.and_then(|op| op.join());
+}
+
+fn watch_loop(shared: &Shared, cmds: &Receiver<MediaCmd>) {
     let mut mgr: Option<SessionManager> = None;
     let mut last_key = String::new();
     // Art can lag the title change by a moment, so re-fetch a few times after a change.
     let mut art_retry_until: Option<Instant> = None;
     let mut last_art_hash: u64 = 0;
+    // Poll faster for a moment after a command, so the play button and title catch up quickly.
+    let mut fast_until: Option<Instant> = None;
+    let mut pending: Option<MediaCmd> = None;
 
     while !shared.stop.load(Ordering::Relaxed) {
         if mgr.is_none() {
@@ -143,12 +234,12 @@ fn watch_loop(shared: &Shared) {
 
         match pick_session(m) {
             Some(session) => {
+                if let Some(cmd) = pending.take() {
+                    run_cmd(&session, cmd);
+                    fast_until = Some(Instant::now() + Duration::from_secs(2));
+                }
                 let props = session.TryGetMediaPropertiesAsync().ok().and_then(|op| op.join().ok());
-                let playing = session
-                    .GetPlaybackInfo()
-                    .and_then(|i| i.PlaybackStatus())
-                    .map(|s| s == PlaybackStatus::Playing)
-                    .unwrap_or(false);
+                let playback = read_playback(&session);
                 let source = hs(session.SourceAppUserModelId());
                 if let Some(props) = props {
                     let title = hs(props.Title());
@@ -183,10 +274,12 @@ fn watch_loop(shared: &Shared) {
                     }
                 }
                 let mut i = shared.info.lock().unwrap();
-                i.playing = playing;
+                i.playback = playback;
                 i.source = source;
             }
             None => {
+                // Nothing to send it to; don't let it fire when a session turns up later.
+                pending = None;
                 if !last_key.is_empty() {
                     last_key.clear();
                     last_art_hash = 0;
@@ -198,8 +291,13 @@ fn watch_loop(shared: &Shared) {
                 }
             }
         }
-        let wait = if art_retry_until.is_some() { 700 } else { 1000 };
-        std::thread::sleep(Duration::from_millis(wait));
+        let fast = fast_until.is_some_and(|t| Instant::now() < t);
+        let wait = if fast { 200 } else if art_retry_until.is_some() { 700 } else { 1000 };
+        match cmds.recv_timeout(Duration::from_millis(wait)) {
+            Ok(cmd) => pending = Some(cmd),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
     }
 }
 

@@ -16,6 +16,16 @@ pub enum Scene {
     Scope,
 }
 
+impl Scene {
+    pub const ALL: [Scene; 3] = [Scene::Terminal, Scene::GradientAscii, Scene::Scope];
+
+    /// The scene after this one, wrapping around.
+    pub fn next(self) -> Scene {
+        let i = Self::ALL.iter().position(|s| *s == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+}
+
 /// How Phosphor Scope plots the waveform (order matches the shader).
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum ScopeMode {
@@ -36,6 +46,26 @@ pub enum AsciiShape {
     Eclipse,
 }
 
+/// When to move on to the next scene by itself.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum AutoScene {
+    Off,
+    /// On each new track.
+    Track,
+    /// Every `auto_scene_minutes`.
+    Timer,
+}
+
+/// The windowed-mode window, in physical pixels: outer position and inner size.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, Debug)]
+pub struct WindowGeom {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub maximized: bool,
+}
+
 /// Colour scheme for the app's UI (not the scenes).
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum UiTheme {
@@ -49,6 +79,8 @@ pub enum UiTheme {
 pub struct Settings {
     /// Not `scene`: older builds stored a numeric scene index under that name.
     pub visual: Scene,
+    pub auto_scene: AutoScene,
+    pub auto_scene_minutes: f32,
     pub ascii_shape: AsciiShape,
     pub ascii_cell: f32,
     pub ascii_density: f32,
@@ -88,12 +120,16 @@ pub struct Settings {
     pub theme: UiTheme,
     pub overlay_opacity: f32,
     pub overlay_click_through: bool,
+    /// Where the window was when the app last closed.
+    pub window: Option<WindowGeom>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             visual: Scene::Terminal,
+            auto_scene: AutoScene::Off,
+            auto_scene_minutes: 5.0,
             ascii_shape: AsciiShape::Horizon,
             ascii_cell: 18.0,
             ascii_density: 0.8,
@@ -126,6 +162,7 @@ impl Default for Settings {
             theme: UiTheme::Dark,
             overlay_opacity: 0.9,
             overlay_click_through: true,
+            window: None,
         }
     }
 }
@@ -149,8 +186,13 @@ impl Settings {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
+            // Write a temporary file and swap it in, so a crash or full disk mid-write can't
+            // leave a truncated settings file behind.
             if let Ok(s) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(p, s);
+                let tmp = p.with_extension("json.tmp");
+                if std::fs::write(&tmp, s).is_ok() && std::fs::rename(&tmp, &p).is_err() {
+                    let _ = std::fs::remove_file(&tmp);
+                }
             }
         }
     }

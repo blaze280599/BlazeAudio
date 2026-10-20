@@ -3,9 +3,9 @@
 
 use egui::{Align2, Color32, CornerRadius, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 
-use crate::media::{TrackInfo, ART_SIZE};
+use crate::media::{MediaCmd, Playback, TrackInfo, ART_SIZE};
 use crate::palette::{Palette, PRESETS};
-use crate::settings::{AsciiShape, Scene, ScopeMode, Settings, UiTheme, WindowMode};
+use crate::settings::{AsciiShape, AutoScene, Scene, ScopeMode, Settings, UiTheme, WindowMode};
 use crate::sys::ProcStats;
 use crate::vis::VisState;
 use crate::volume::Volume;
@@ -18,6 +18,7 @@ const DRAWER_W: f32 = 300.0;
 pub enum UiAction {
     SetMode(WindowMode),
     HideSidebar,
+    Media(MediaCmd),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -282,7 +283,9 @@ impl UiState {
                                 c.stats.private_mb,
                                 c.vis.bpm
                             );
-                            ui.label(RichText::new(txt).monospace().color(ft.text));
+                            // Never wrap: the Area's width comes from its first frame, which a
+                            // longer line later (e.g. a bigger RAM figure) would break.
+                            ui.add(egui::Label::new(RichText::new(txt).monospace().color(ft.text)).extend());
                         });
                 });
         }
@@ -312,8 +315,14 @@ impl UiState {
                                     ui.add_space(6.0);
                                     ui.label(RichText::new(&c.track.title).size(20.0).strong().color(ft.text));
                                     ui.label(RichText::new(&c.track.artist).size(14.0).color(ft.dim));
-                                    if !c.track.album.is_empty() {
-                                        ui.label(RichText::new(&c.track.album).size(11.5).color(ft.faint));
+                                    // Singles often have the album named after the track; don't repeat it.
+                                    let album = &c.track.album;
+                                    if !album.is_empty() && !album.eq_ignore_ascii_case(&c.track.title) {
+                                        ui.label(RichText::new(album).size(11.5).color(ft.faint));
+                                    }
+                                    let pb = c.track.playback;
+                                    if !pb.playing && pb.can_play_pause {
+                                        ui.label(RichText::new("Paused").size(11.5).color(ft.faint));
                                     }
                                 });
                                 ui.add_space(8.0);
@@ -418,20 +427,33 @@ impl UiState {
                 actions.push(UiAction::HideSidebar);
             }
             ui.add_space(6.0);
-            self.now_playing(ui, c, t, accent, expanded);
+            self.now_playing(ui, c, t, accent, expanded, actions);
         });
     }
 
-    fn now_playing(&self, ui: &mut egui::Ui, c: &UiCtx, t: &Tokens, accent: Color32, expanded: bool) {
+    fn now_playing(&self, ui: &mut egui::Ui, c: &UiCtx, t: &Tokens, accent: Color32, expanded: bool, actions: &mut Vec<UiAction>) {
         let tip = if c.track.title.is_empty() { "Nothing playing".to_owned() } else { format!("{}\n{}", c.track.title, c.track.artist) };
+        let pb = c.track.playback;
+        let has_track = !c.track.title.is_empty();
+        let show_time = has_track && pb.duration > 0.0;
+        let show_controls = has_track && (pb.can_play_pause || pb.can_next || pb.can_previous);
         if !expanded {
+            // Bottom-up: the play button goes under the cover.
+            if show_controls && pb.can_play_pause {
+                let (icon, tip) = if pb.playing { (Icon::Pause, "Pause (Space)") } else { (Icon::Play, "Play (Space)") };
+                if icon_button(ui, t, icon, 40.0).on_hover_text(tip).clicked() {
+                    actions.push(UiAction::Media(MediaCmd::PlayPause));
+                }
+            }
             let (rect, resp) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::hover());
             self.paint_art(ui, rect, t, 7);
             resp.on_hover_text(tip);
             return;
         }
         // The sidebar footer lays out bottom-up; give the card a fixed top-down box of its own.
-        let size = egui::vec2(ui.available_width(), 12.0 * 2.0 + 48.0 + 10.0 + 28.0);
+        // Each optional row adds its height plus the 7 pt item spacing.
+        let extra = if show_time { 14.0 + 7.0 } else { 0.0 } + if show_controls { 28.0 + 7.0 } else { 0.0 };
+        let size = egui::vec2(ui.available_width(), 12.0 * 2.0 + 48.0 + 10.0 + 28.0 + extra);
         ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
             egui::Frame::new()
                 .fill(t.card)
@@ -457,6 +479,12 @@ impl UiState {
                     })
                     .response
                     .on_hover_text(tip);
+                    if show_time {
+                        progress_row(ui, t, &pb);
+                    }
+                    if show_controls {
+                        transport(ui, t, &pb, actions);
+                    }
                     ui.add_space(10.0 - ui.spacing().item_spacing.y);
                     spectrum_meter(ui, c.vis, t, accent, 28.0);
                 });
@@ -556,6 +584,15 @@ impl UiState {
                             }
                         }
                     });
+                    let autos = [(AutoScene::Off, "Off"), (AutoScene::Track, "Each track"), (AutoScene::Timer, "Timed")];
+                    choice(ui, t, "Auto-switch scene", &mut s.auto_scene, d.auto_scene, &autos);
+                    if s.auto_scene == AutoScene::Timer {
+                        knob(ui, t, "Switch every", &mut s.auto_scene_minutes, d.auto_scene_minutes, 0.5..=30.0, num(1, " min"));
+                    }
+                    // Faulty Terminal has no settings of its own; the separator below covers it.
+                    if s.visual != Scene::Terminal {
+                        ui.separator();
+                    }
                     if s.visual == Scene::Scope {
                         ui.add_space(2.0);
                         choice(ui, t, "Mode", &mut s.scope_mode, d.scope_mode, &[(ScopeMode::Yt, "Y-T sweep"), (ScopeMode::Polar, "Polar")]);
@@ -682,14 +719,15 @@ impl UiState {
                             .inner_margin(Margin::same(10))
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
-                                ui.label(RichText::new("Reset every setting to its default? Theme, startup mode and sidebar size stay.").color(t.text));
+                                ui.label(RichText::new("Reset every setting to its default? Theme, startup mode, sidebar size and window position stay.").color(t.text));
                                 ui.horizontal(|ui| {
                                     if ui.button("Reset").clicked() {
-                                        let (mode, expanded, theme) = (s.start_mode, s.sidebar_expanded, s.theme);
+                                        let (mode, expanded, theme, window) = (s.start_mode, s.sidebar_expanded, s.theme, s.window);
                                         *s = Settings::default();
                                         s.start_mode = mode;
                                         s.sidebar_expanded = expanded;
                                         s.theme = theme;
+                                        s.window = window;
                                         self.confirm_reset = false;
                                     }
                                     if ui.button("Cancel").clicked() {
@@ -700,9 +738,12 @@ impl UiState {
                     }
                 }
                 Section::Hotkeys => {
-                    let rows: [(&str, &[&str]); 9] = [
+                    let rows: [(&str, &[&str]); 12] = [
                         ("Sidebar", &["F1", "Tab"]),
                         ("Scene", &["1", "2", "3"]),
+                        ("Next scene", &["S"]),
+                        ("Play / pause", &["Space"]),
+                        ("Next / previous track", &["N", "P"]),
                         ("Fullscreen", &["F11", "F", "Alt+Enter"]),
                         ("Overlay mode", &["O"]),
                         ("Show now playing", &["T"]),
@@ -787,6 +828,66 @@ fn icon_button(ui: &mut egui::Ui, t: &Tokens, icon: Icon, size: f32) -> egui::Re
     }
     paint_icon(ui.painter(), icon, rect.center(), if hovered { t.text } else { t.dim });
     resp
+}
+
+/// "3:07", or "1:02:45" past an hour.
+fn fmt_time(secs: f32) -> String {
+    let s = secs.max(0.0) as u32;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// Elapsed time, a thin progress bar, and the track length.
+fn progress_row(ui: &mut egui::Ui, t: &Tokens, pb: &Playback) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 14.0), Sense::hover());
+    let p = ui.painter();
+    let font = FontId::monospace(10.5);
+    let pos = pb.position_now();
+    let l = p.text(rect.left_center(), Align2::LEFT_CENTER, fmt_time(pos), font.clone(), t.faint);
+    let r = p.text(rect.right_center(), Align2::RIGHT_CENTER, fmt_time(pb.duration), font, t.faint);
+    let y = rect.center().y;
+    let bar = Rect::from_min_max(egui::pos2(l.right() + 8.0, y - 1.5), egui::pos2(r.left() - 8.0, y + 1.5));
+    if bar.width() > 4.0 {
+        p.rect_filled(bar, CornerRadius::same(2), t.control);
+        let done = bar.width() * (pos / pb.duration).clamp(0.0, 1.0);
+        p.rect_filled(Rect::from_min_size(bar.min, egui::vec2(done, bar.height())), CornerRadius::same(2), t.dim);
+    }
+}
+
+/// Previous / play-pause / next, centred. Buttons the app doesn't support are dimmed.
+fn transport(ui: &mut egui::Ui, t: &Tokens, pb: &Playback, actions: &mut Vec<UiAction>) {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), Sense::hover());
+    let play = if pb.playing { (Icon::Pause, "Pause (Space)") } else { (Icon::Play, "Play (Space)") };
+    let buttons = [
+        (-40.0, Icon::Previous, "Previous track (P)", pb.can_previous, MediaCmd::Previous, false),
+        (0.0, play.0, play.1, pb.can_play_pause, MediaCmd::PlayPause, true),
+        (40.0, Icon::Next, "Next track (N)", pb.can_next, MediaCmd::Next, false),
+    ];
+    for (i, (dx, icon, tip, enabled, cmd, primary)) in buttons.into_iter().enumerate() {
+        let r = Rect::from_center_size(rect.center() + egui::vec2(dx, 0.0), Vec2::splat(28.0));
+        let sense = if enabled { Sense::click() } else { Sense::hover() };
+        let b = ui.interact(r, resp.id.with(i), sense);
+        let hovered = enabled && b.hovered();
+        let p = ui.painter();
+        let col = if primary {
+            // A filled disc with the icon cut out of it in the panel colour.
+            let disc = if !enabled { t.faint } else if hovered { t.text } else { t.text.gamma_multiply(0.85) };
+            p.circle_filled(r.center(), 14.0, disc);
+            t.sidebar
+        } else {
+            if hovered {
+                p.circle_filled(r.center(), 14.0, t.hover);
+            }
+            if !enabled { t.faint } else if hovered { t.text } else { t.dim }
+        };
+        paint_icon(p, icon, r.center(), col);
+        if b.on_hover_text(tip).clicked() {
+            actions.push(UiAction::Media(cmd));
+        }
+    }
 }
 
 /// Width reserved for a slider's value box; wide enough for "140 ms", "0.08 s" or "100%".
@@ -1000,6 +1101,10 @@ enum Icon {
     Overlay,
     Speaker,
     Muted,
+    Play,
+    Pause,
+    Previous,
+    Next,
 }
 
 /// Small line icons, drawn in a ~16 pt box centred on `c`.
@@ -1114,6 +1219,22 @@ fn paint_icon(p: &egui::Painter, icon: Icon, c: Pos2, col: Color32) {
         Icon::Overlay => {
             p.rect_stroke(Rect::from_center_size(c + v(-2.0, -2.0), v(10.0, 8.0)), CornerRadius::same(1), s, StrokeKind::Middle);
             p.rect_stroke(Rect::from_center_size(c + v(2.5, 2.5), v(10.0, 8.0)), CornerRadius::same(1), s, StrokeKind::Middle);
+        }
+        Icon::Play => {
+            // Nudged right so the triangle looks centred.
+            let pts = [v(-3.0, -5.5), v(5.5, 0.0), v(-3.0, 5.5)];
+            p.add(egui::Shape::convex_polygon(pts.iter().map(|o| c + *o).collect(), col, Stroke::NONE));
+        }
+        Icon::Pause => {
+            for x in [-3.0, 3.0] {
+                p.rect_filled(Rect::from_center_size(c + v(x, 0.0), v(3.0, 11.0)), CornerRadius::same(1), col);
+            }
+        }
+        Icon::Previous | Icon::Next => {
+            let d = if matches!(icon, Icon::Next) { 1.0 } else { -1.0 };
+            let pts = [v(-4.0 * d, -5.0), v(3.0 * d, 0.0), v(-4.0 * d, 5.0)];
+            p.add(egui::Shape::convex_polygon(pts.iter().map(|o| c + *o).collect(), col, Stroke::NONE));
+            p.rect_filled(Rect::from_center_size(c + v(4.5 * d, 0.0), v(2.0, 10.0)), CornerRadius::ZERO, col);
         }
     }
 }
