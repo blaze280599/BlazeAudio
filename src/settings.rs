@@ -112,6 +112,7 @@ pub struct Settings {
 
     pub show_track_toast: bool,
     pub show_volume: bool,
+    pub show_timeline: bool,
     pub show_stats: bool,
     pub idle_fps: u32,
 
@@ -155,6 +156,7 @@ impl Default for Settings {
             preset_palette: 0,
             show_track_toast: true,
             show_volume: true,
+            show_timeline: true,
             show_stats: false,
             idle_fps: 30,
             start_mode: WindowMode::Windowed,

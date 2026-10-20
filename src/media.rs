@@ -26,6 +26,8 @@ pub enum MediaCmd {
     PlayPause,
     Next,
     Previous,
+    /// Jump to this many seconds into the track.
+    Seek(f32),
 }
 
 /// Play state and timeline. Changes every second or so, so it's read every frame instead of
@@ -36,6 +38,7 @@ pub struct Playback {
     pub can_play_pause: bool,
     pub can_next: bool,
     pub can_previous: bool,
+    pub can_seek: bool,
     /// Seconds into the track when `at` was taken.
     pub position: f32,
     /// Track length in seconds; 0 when the app doesn't report a timeline.
@@ -69,8 +72,14 @@ pub struct TrackInfo {
 
 struct Shared {
     info: Mutex<TrackInfo>,
+    /// Where the last seek went and when. The app takes a moment to report its new position,
+    /// so until it does the timeline shows this instead of snapping back.
+    seek_hold: Mutex<Option<(f32, Instant)>>,
     stop: AtomicBool,
 }
+
+/// How long a seek is trusted over what the app reports.
+const SEEK_HOLD: Duration = Duration::from_secs(3);
 
 pub struct MediaWatcher {
     shared: Arc<Shared>,
@@ -81,6 +90,7 @@ impl MediaWatcher {
     pub fn start() -> Self {
         let shared = Arc::new(Shared {
             info: Mutex::new(TrackInfo::default()),
+            seek_hold: Mutex::new(None),
             stop: AtomicBool::new(false),
         });
         let s = shared.clone();
@@ -100,11 +110,30 @@ impl MediaWatcher {
 
     /// Asks the media session to play/pause or skip. Handled on the media thread.
     pub fn send(&self, cmd: MediaCmd) {
+        {
+            let mut hold = self.shared.seek_hold.lock().unwrap();
+            match cmd {
+                MediaCmd::Seek(pos) => *hold = Some((pos, Instant::now())),
+                // A new track starts from its own beginning.
+                MediaCmd::Next | MediaCmd::Previous => *hold = None,
+                MediaCmd::PlayPause => {}
+            }
+        }
         let _ = self.cmds.send(cmd);
     }
 
     pub fn playback(&self) -> Playback {
-        self.shared.info.lock().unwrap().playback
+        let mut pb = self.shared.info.lock().unwrap().playback;
+        if let Some((pos, at)) = *self.shared.seek_hold.lock().unwrap() {
+            let age = at.elapsed();
+            let expect = pos + if pb.playing { age.as_secs_f32() } else { 0.0 };
+            // Once the app's own position agrees, it takes over again.
+            if age < SEEK_HOLD && (pb.position_now() - expect).abs() > 1.0 {
+                pb.position = expect.clamp(0.0, pb.duration);
+                pb.at = Some(Instant::now());
+            }
+        }
+        pb
     }
 
     pub fn snapshot(&self) -> TrackInfo {
@@ -176,6 +205,7 @@ fn read_playback(session: &Session) -> Playback {
             pb.can_play_pause = c.IsPlayPauseToggleEnabled().unwrap_or(false);
             pb.can_next = c.IsNextEnabled().unwrap_or(false);
             pb.can_previous = c.IsPreviousEnabled().unwrap_or(false);
+            pb.can_seek = c.IsPlaybackPositionEnabled().unwrap_or(false);
         }
     }
     if let Ok(tl) = session.GetTimelineProperties() {
@@ -208,6 +238,11 @@ fn run_cmd(session: &Session, cmd: MediaCmd) {
         MediaCmd::PlayPause => session.TryTogglePlayPauseAsync(),
         MediaCmd::Next => session.TrySkipNextAsync(),
         MediaCmd::Previous => session.TrySkipPreviousAsync(),
+        MediaCmd::Seek(secs) => {
+            // Positions are absolute ticks (100 ns), counted from the timeline's start.
+            let start = session.GetTimelineProperties().and_then(|t| t.StartTime()).map_or(0, |d| d.Duration);
+            session.TryChangePlaybackPositionAsync(start + (secs.max(0.0) as f64 * 1e7) as i64)
+        }
     };
     let _ = op.and_then(|op| op.join());
 }
@@ -220,7 +255,7 @@ fn watch_loop(shared: &Shared, cmds: &Receiver<MediaCmd>) {
     let mut last_art_hash: u64 = 0;
     // Poll faster for a moment after a command, so the play button and title catch up quickly.
     let mut fast_until: Option<Instant> = None;
-    let mut pending: Option<MediaCmd> = None;
+    let mut pending: Vec<MediaCmd> = Vec::new();
 
     while !shared.stop.load(Ordering::Relaxed) {
         if mgr.is_none() {
@@ -234,8 +269,10 @@ fn watch_loop(shared: &Shared, cmds: &Receiver<MediaCmd>) {
 
         match pick_session(m) {
             Some(session) => {
-                if let Some(cmd) = pending.take() {
-                    run_cmd(&session, cmd);
+                if !pending.is_empty() {
+                    for cmd in pending.drain(..) {
+                        run_cmd(&session, cmd);
+                    }
                     fast_until = Some(Instant::now() + Duration::from_secs(2));
                 }
                 let props = session.TryGetMediaPropertiesAsync().ok().and_then(|op| op.join().ok());
@@ -279,7 +316,7 @@ fn watch_loop(shared: &Shared, cmds: &Receiver<MediaCmd>) {
             }
             None => {
                 // Nothing to send it to; don't let it fire when a session turns up later.
-                pending = None;
+                pending.clear();
                 if !last_key.is_empty() {
                     last_key.clear();
                     last_art_hash = 0;
@@ -294,7 +331,16 @@ fn watch_loop(shared: &Shared, cmds: &Receiver<MediaCmd>) {
         let fast = fast_until.is_some_and(|t| Instant::now() < t);
         let wait = if fast { 200 } else if art_retry_until.is_some() { 700 } else { 1000 };
         match cmds.recv_timeout(Duration::from_millis(wait)) {
-            Ok(cmd) => pending = Some(cmd),
+            Ok(cmd) => {
+                // Take everything queued up. A run of seeks (a held arrow key, wheel spins) only
+                // needs its last one.
+                for cmd in std::iter::once(cmd).chain(cmds.try_iter()) {
+                    match (pending.last_mut(), cmd) {
+                        (Some(last @ MediaCmd::Seek(_)), MediaCmd::Seek(_)) => *last = cmd,
+                        _ => pending.push(cmd),
+                    }
+                }
+            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }

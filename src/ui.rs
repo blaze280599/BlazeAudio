@@ -115,8 +115,10 @@ pub struct UiState {
     /// Settings section open in the drawer beside the sidebar.
     pub drawer: Option<Section>,
     volume_slider: WakeSlider,
-    /// The pointer is on the volume bar (or dragging it), so it shouldn't fade out.
-    pub volume_hot: bool,
+    /// The pointer is on the volume bar or timeline (or dragging one), so they shouldn't fade out.
+    pub controls_hot: bool,
+    /// Where the on-scene timeline is being dragged to; sent as a seek on release.
+    scrub: Option<f32>,
     look_undo: Vec<Settings>,
     /// "Reset all settings" was clicked and is waiting for a confirm.
     confirm_reset: bool,
@@ -142,6 +144,8 @@ pub struct UiCtx<'a> {
     pub volume: &'a Volume,
     /// Opacity of the volume bar: the on-scene controls, or a flash after a volume key.
     pub volume_alpha: f32,
+    /// Opacity of the timeline: the on-scene controls, or a flash after a seek key.
+    pub timeline_alpha: f32,
 }
 
 fn to_c32(c: [f32; 3], a: u8) -> Color32 {
@@ -156,7 +160,8 @@ impl UiState {
             styled: None,
             drawer: None,
             volume_slider: WakeSlider::default(),
-            volume_hot: false,
+            controls_hot: false,
+            scrub: None,
             look_undo: Vec::new(),
             confirm_reset: false,
         }
@@ -290,13 +295,19 @@ impl UiState {
                 });
         }
 
+        // The bottom-centre stack: volume bar at the bottom, timeline above it. Each slides
+        // down as the one below it fades, and the toast rises above whatever is showing.
+        let vol_a = if c.settings.show_volume && c.volume.available() { c.volume_alpha } else { 0.0 };
+        let tl_a = c.timeline_alpha;
+        let toast_lift = 64.0 * vol_a + 46.0 * tl_a;
+
         if c.toast_alpha > 0.0 && c.settings.show_track_toast && !c.track.title.is_empty() {
             // An Area keeps the size it measured last time, so a longer title would wrap to the
             // previous track's width. A fresh id per track makes it measure again.
             egui::Area::new(egui::Id::new(("toast", &c.track.title, &c.track.artist, &c.track.album)))
                 .pivot(Align2::LEFT_BOTTOM)
-                // Rises above the volume bar while that is showing.
-                .fixed_pos(scene_rect.left_bottom() + egui::vec2(26.0, -26.0 - 64.0 * c.volume_alpha))
+                // Rises above the volume bar and timeline while they're showing.
+                .fixed_pos(scene_rect.left_bottom() + egui::vec2(26.0, -26.0 - toast_lift))
                 .interactable(false)
                 .show(ctx, |ui| {
                     ui.multiply_opacity(c.toast_alpha);
@@ -334,12 +345,41 @@ impl UiState {
         if c.controls_alpha > 0.0 {
             window_buttons(ctx, scene_rect, &c, &ft, &mut actions);
         }
-        self.volume_hot = false;
-        if c.volume_alpha > 0.0 && c.settings.show_volume && c.volume.available() {
+        self.controls_hot = false;
+        if vol_a > 0.0 {
             self.volume_bar(ctx, scene_rect, &c, &ft, accent);
+        }
+        if tl_a > 0.0 {
+            // The volume pill is 40 pt tall; 8 pt between them.
+            self.timeline(ctx, scene_rect, &c, &ft, 48.0 * vol_a, &mut actions);
+        } else if let Some(v) = self.scrub.take() {
+            // Hidden mid-drag (e.g. the track ended): still go where it was dragged.
+            actions.push(UiAction::Media(MediaCmd::Seek(v)));
         }
 
         (actions, scene_rect)
+    }
+
+    /// The track timeline over the scene, above the volume bar: wide enough to scrub precisely.
+    fn timeline(&mut self, ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens, lift: f32, actions: &mut Vec<UiAction>) {
+        let pb = c.track.playback;
+        let w = (scene.width() - 120.0).clamp(240.0, 640.0);
+        let resp = egui::Area::new(egui::Id::new("timeline"))
+            .pivot(Align2::CENTER_BOTTOM)
+            .fixed_pos(scene.center_bottom() + egui::vec2(0.0, -18.0 - lift))
+            .show(ctx, |ui| {
+                ui.multiply_opacity(c.timeline_alpha);
+                egui::Frame::new()
+                    .fill(t.float)
+                    .stroke(Stroke::new(1.0_f32, t.border))
+                    .corner_radius(CornerRadius::same(16))
+                    .inner_margin(Margin::symmetric(14, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(w - 28.0);
+                        seek_bar(ui, t, &pb, 22.0, 12.0, Some(&mut self.scrub), actions);
+                    });
+            });
+        self.controls_hot |= self.scrub.is_some() || resp.response.contains_pointer();
     }
 
     /// Output volume over the bottom centre of the scene: mute button, wake slider, percent.
@@ -393,7 +433,7 @@ impl UiState {
                         .inner
                     })
             });
-        self.volume_hot = resp.inner.inner || resp.response.contains_pointer();
+        self.controls_hot = resp.inner.inner || resp.response.contains_pointer();
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui, c: &mut UiCtx, t: &Tokens, accent: Color32, actions: &mut Vec<UiAction>) {
@@ -480,7 +520,7 @@ impl UiState {
                     .response
                     .on_hover_text(tip);
                     if show_time {
-                        progress_row(ui, t, &pb);
+                        seek_bar(ui, t, &pb, 14.0, 10.5, None, actions);
                     }
                     if show_controls {
                         transport(ui, t, &pb, actions);
@@ -702,6 +742,7 @@ impl UiState {
                     heading(ui, t, "On the scene");
                     ui.checkbox(&mut s.show_track_toast, "Now-playing toast on track change");
                     ui.checkbox(&mut s.show_volume, "Volume bar");
+                    ui.checkbox(&mut s.show_timeline, "Track timeline (seek by dragging)");
                     ui.checkbox(&mut s.show_stats, "Performance stats (F3)");
                     knob(ui, t, "Idle frame cap", &mut s.idle_fps, d.idle_fps, 5..=60, num(0, " fps"));
 
@@ -738,12 +779,13 @@ impl UiState {
                     }
                 }
                 Section::Hotkeys => {
-                    let rows: [(&str, &[&str]); 12] = [
+                    let rows: [(&str, &[&str]); 13] = [
                         ("Sidebar", &["F1", "Tab"]),
                         ("Scene", &["1", "2", "3"]),
                         ("Next scene", &["S"]),
                         ("Play / pause", &["Space"]),
                         ("Next / previous track", &["N", "P"]),
+                        ("Seek 5 s", &["Left", "Right"]),
                         ("Fullscreen", &["F11", "F", "Alt+Enter"]),
                         ("Overlay mode", &["O"]),
                         ("Show now playing", &["T"]),
@@ -840,21 +882,102 @@ fn fmt_time(secs: f32) -> String {
     }
 }
 
-/// Elapsed time, a thin progress bar, and the track length.
-fn progress_row(ui: &mut egui::Ui, t: &Tokens, pb: &Playback) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 14.0), Sense::hover());
-    let p = ui.painter();
-    let font = FontId::monospace(10.5);
-    let pos = pb.position_now();
-    let l = p.text(rect.left_center(), Align2::LEFT_CENTER, fmt_time(pos), font.clone(), t.faint);
-    let r = p.text(rect.right_center(), Align2::RIGHT_CENTER, fmt_time(pb.duration), font, t.faint);
+/// Elapsed time, a seek bar and the track length. With `scrub` the bar can be dragged (the
+/// drag position lives there and is sent on release) and scrolled ±5 s; without it a click
+/// jumps. Hovering shows the time under the pointer.
+fn seek_bar(ui: &mut egui::Ui, t: &Tokens, pb: &Playback, height: f32, font_size: f32, scrub: Option<&mut Option<f32>>, actions: &mut Vec<UiAction>) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
+    let font = FontId::monospace(font_size);
+    // Both labels get the width of the longer one, so the bar doesn't shift as time passes.
+    let slot = ui.painter().layout_no_wrap(fmt_time(pb.duration), font.clone(), t.faint).size().x;
     let y = rect.center().y;
-    let bar = Rect::from_min_max(egui::pos2(l.right() + 8.0, y - 1.5), egui::pos2(r.left() - 8.0, y + 1.5));
-    if bar.width() > 4.0 {
-        p.rect_filled(bar, CornerRadius::same(2), t.control);
-        let done = bar.width() * (pos / pb.duration).clamp(0.0, 1.0);
-        p.rect_filled(Rect::from_min_size(bar.min, egui::vec2(done, bar.height())), CornerRadius::same(2), t.dim);
+    let track = Rect::from_min_max(egui::pos2(rect.left() + slot + 8.0, y), egui::pos2(rect.right() - slot - 8.0, y));
+    if track.width() < 8.0 {
+        return;
     }
+    let draggable = scrub.is_some();
+    let sense = if !pb.can_seek {
+        Sense::hover()
+    } else if draggable {
+        Sense::click_and_drag()
+    } else {
+        Sense::click()
+    };
+    // The bar is a few points tall; take the whole row height (and a little past the ends) to
+    // make it easy to hit.
+    let hit = Rect::from_min_max(egui::pos2(track.left() - 6.0, rect.top()), egui::pos2(track.right() + 6.0, rect.bottom()));
+    let resp = ui.interact(hit, ui.make_persistent_id("seek"), sense);
+    let at = |x: f32| ((x - track.left()) / track.width()).clamp(0.0, 1.0) * pb.duration;
+    let end = (pb.duration - 1.0).max(0.0);
+
+    // A position chosen this frame, shown right away (the media thread catches up next frame).
+    let mut chosen = None;
+    if pb.can_seek {
+        let seek = |v: f32, actions: &mut Vec<UiAction>| {
+            actions.push(UiAction::Media(MediaCmd::Seek(v)));
+            Some(v)
+        };
+        match scrub {
+            Some(scrub) => {
+                if resp.is_pointer_button_down_on() {
+                    if let Some(p) = resp.interact_pointer_pos() {
+                        *scrub = Some(at(p.x));
+                    }
+                } else if let Some(v) = scrub.take() {
+                    chosen = seek(v, actions);
+                } else if resp.hovered() {
+                    let s = ui.input(|i| i.raw_scroll_delta.y + i.raw_scroll_delta.x);
+                    if s != 0.0 {
+                        chosen = seek((pb.position_now() + s.signum() * 5.0).clamp(0.0, end), actions);
+                    }
+                }
+                chosen = chosen.or(*scrub);
+            }
+            None => {
+                if let (true, Some(p)) = (resp.clicked(), resp.interact_pointer_pos()) {
+                    chosen = seek(at(p.x), actions);
+                }
+            }
+        }
+    }
+
+    let held = draggable && resp.is_pointer_button_down_on();
+    let active = pb.can_seek && (resp.hovered() || held);
+    let pos = chosen.unwrap_or_else(|| pb.position_now());
+    // Over the scene the pill is translucent and the visuals busy, so labels and the unplayed
+    // track need more contrast than on the solid sidebar.
+    let (label, rail) = if draggable { (t.dim, t.faint.gamma_multiply(0.45)) } else { (t.faint, t.control) };
+    let p = ui.painter();
+    p.text(egui::pos2(track.left() - 8.0, y), Align2::RIGHT_CENTER, fmt_time(pos), font.clone(), if held { t.text } else { label });
+    p.text(egui::pos2(track.right() + 8.0, y), Align2::LEFT_CENTER, fmt_time(pb.duration), font, label);
+    let thick = if active { 5.0 } else { 3.0 };
+    let bar = Rect::from_center_size(track.center(), egui::vec2(track.width(), thick));
+    p.rect_filled(bar, CornerRadius::same(3), rail);
+    let x = bar.left() + bar.width() * (pos / pb.duration).clamp(0.0, 1.0);
+    let rest = if draggable { t.text.gamma_multiply(0.85) } else { t.dim };
+    p.rect_filled(Rect::from_min_max(bar.min, egui::pos2(x, bar.max.y)), CornerRadius::same(3), if active { t.text } else { rest });
+    if active {
+        p.circle_filled(egui::pos2(x, y), thick + 1.5, t.text);
+        // While dragging the bubble rides on the handle; otherwise it follows the pointer.
+        let bx = if held { x } else { resp.hover_pos().map_or(x, |h| h.x.clamp(track.left(), track.right())) };
+        time_bubble(ui.ctx(), egui::pos2(bx, rect.top() - 3.0), &fmt_time(at(bx)), t);
+        let icon = match (draggable, held) {
+            (true, true) => egui::CursorIcon::Grabbing,
+            (true, false) => egui::CursorIcon::Grab,
+            _ => egui::CursorIcon::PointingHand,
+        };
+        ui.ctx().set_cursor_icon(icon);
+    }
+}
+
+/// A small time label floating above `anchor` (its bottom centre), on top of everything.
+fn time_bubble(ctx: &egui::Context, anchor: Pos2, text: &str, t: &Tokens) {
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("seek-bubble")));
+    let galley = p.layout_no_wrap(text.to_owned(), FontId::monospace(11.0), t.text);
+    let size = galley.size() + egui::vec2(12.0, 6.0);
+    let r = Rect::from_min_size(anchor - egui::vec2(size.x / 2.0, size.y), size);
+    p.rect(r, CornerRadius::same(5), with_alpha(t.drawer, 255), Stroke::new(1.0_f32, t.border), StrokeKind::Inside);
+    p.galley(r.center() - galley.size() / 2.0, galley, t.text);
 }
 
 /// Previous / play-pause / next, centred. Buttons the app doesn't support are dimmed.

@@ -43,6 +43,8 @@ When the track changes, BlazeAudio extracts the main colors from the cover and f
 
 The now-playing card in the sidebar shows how far into the track you are, with previous / play-pause / next buttons underneath (the collapsed rail keeps a play/pause button under the cover). They control the same media session BlazeAudio reads (Spotify when it's open). `Space` plays or pauses, `N` and `P` skip forward and back, and each brings up the now-playing card. Buttons the app doesn't support are dimmed.
 
+To seek, move the mouse over the visualizer: a wide timeline appears above the volume bar. Drag it (the song jumps when you let go), click anywhere on it, or scroll over it to move 5 s at a time. Hovering shows the time under the pointer. The small bar in the sidebar card is for quick jumps: hover it to see the time, click to go there. `Left` / `Right` seek 5 s back or forward (hold to keep going) and flash the timeline up. Turn the on-scene timeline off in **General**.
+
 With nothing playing, or with album colors turned off, it uses one of five built-in palettes: Neon Synth, Ember, Aurora, Glacier, or Acid.
 
 ## Window modes
@@ -66,6 +68,7 @@ The window reopens where you left it, at the same size and maximized if it was (
 | `S` | Next scene |
 | `Space` | Play / pause |
 | `N` / `P` | Next / previous track |
+| `Left` / `Right` | Seek 5 s back / forward |
 | `T` | Show now-playing card |
 | `Up` / `Down` | Volume up / down 2% |
 | `M` | Mute / unmute |
@@ -89,7 +92,7 @@ The sections:
 - **Visuals**: scene, auto-switch (off, each track, or timed), Gradient ASCII shape, cell size, density, glyph and gradient opacity, Phosphor Scope mode, persistence, beam width and gain, intensity, bloom strength and threshold, exposure, chromatic aberration, film grain, vignette, render scale (lower it on slower GPUs). **Randomize**, **Undo** and **Reset** stay pinned at the bottom of the drawer. Randomize rolls a new look (shapes, modes and effect sliders, kept within watchable ranges), Reset puts the visual settings back to defaults, and Undo steps back through the looks before each Randomize or Reset. All three leave the current scene and render scale alone.
 - **Audio**: sensitivity, attack (how fast bars rise), decay (how fast they fall), beat sensitivity.
 - **Palette**: album-art colors on/off, the fallback palette (each preset listed with its colors; it can only be picked while it's in use, i.e. with album colors off, nothing playing, or a cover with no colors), swatches of the current colors.
-- **General**: window mode and startup mode; overlay opacity and click-through (grouped, and only adjustable in overlay mode); theme (Dark, OLED black, or Light for the sidebar and controls); now-playing card, volume bar, performance stats; idle frame-rate cap. **Reset all settings** asks for confirmation first and keeps the theme, startup mode, sidebar size and window position.
+- **General**: window mode and startup mode; overlay opacity and click-through (grouped, and only adjustable in overlay mode); theme (Dark, OLED black, or Light for the sidebar and controls); now-playing card, volume bar, track timeline, performance stats; idle frame-rate cap. **Reset all settings** asks for confirmation first and keeps the theme, startup mode, sidebar size and window position.
 - **Hotkeys**: the full key list.
 
 Settings are saved to `%APPDATA%\BlazeAudio\settings.json` when you close the panel or quit.
@@ -103,7 +106,7 @@ Settings are saved to `%APPDATA%\BlazeAudio\settings.json` when you close the pa
   - Per-band attack/decay smoothing (configurable)
   - **Beats**: SuperFlux-style spectral flux (lag-4, max-filtered, kick-weighted) with an adaptive mean + kσ threshold
   - **Tempo**: autocorrelation of the onset envelope over 5.5 s with a log-normal 120 BPM prior. Once a tempo locks, a refractory window keeps beat pulses on the beat instead of off-beat hats.
-- **Metadata**: `GlobalSystemMediaTransportControlsSessionManager` (prefers a Spotify session). The cover thumbnail is decoded, then a palette comes from k-means in Oklab, scored for vividness and hue diversity. The Spotify Web API is not used. Play/pause and skips go through the same session's `TryTogglePlayPauseAsync` / `TrySkipNextAsync` / `TrySkipPreviousAsync`. The timeline position is carried forward from the app's `LastUpdatedTime` (Spotify only reports it on play, pause and seeks).
+- **Metadata**: `GlobalSystemMediaTransportControlsSessionManager` (prefers a Spotify session). The cover thumbnail is decoded, then a palette comes from k-means in Oklab, scored for vividness and hue diversity. The Spotify Web API is not used. Play/pause and skips go through the same session's `TryTogglePlayPauseAsync` / `TrySkipNextAsync` / `TrySkipPreviousAsync`, and seeks through `TryChangePlaybackPositionAsync`. A run of seeks (a held arrow key, a spun wheel) is merged into one request, and the timeline shows the new position until the app reports it, so it doesn't snap back. The timeline position is carried forward from the app's `LastUpdatedTime` (Spotify only reports it on play, pause and seeks).
 - **Volume**: `IAudioEndpointVolume` on the default render endpoint, owned by a worker thread that applies changes from the UI and re-reads the level every 250 ms (re-resolving the default device every 2 s).
 - **Rendering** (wgpu → DX12):
   - The scene draws into an Rgba16Float target sized to the area beside the sidebar.

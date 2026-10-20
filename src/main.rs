@@ -149,6 +149,8 @@ struct App {
     volume: volume::Volume,
     /// Seconds left of the volume bar flashing up after a volume key.
     volume_flash: f32,
+    /// Seconds left of the timeline flashing up after a seek key.
+    seek_flash: f32,
     /// Seconds the current scene has been on screen with music playing (for the scene timer).
     scene_clock: f32,
 
@@ -197,6 +199,7 @@ impl App {
             toast_t: 0.0,
             volume: volume::Volume::new(),
             volume_flash: 0.0,
+            seek_flash: 0.0,
             scene_clock: 0.0,
             hotkeys: sys::GlobalHotkeys::new(),
             stats: sys::ProcStats::new(),
@@ -341,6 +344,16 @@ impl App {
                 self.volume.set_muted(!self.volume.muted());
                 self.volume_flash = 1.6;
             }
+            KeyCode::ArrowLeft | KeyCode::ArrowRight => {
+                let pb = self.media.playback();
+                if pb.can_seek && pb.duration > 0.0 {
+                    let step = if code == KeyCode::ArrowRight { 5.0 } else { -5.0 };
+                    // Stop short of the end, so a held key doesn't skip the track.
+                    let to = (pb.position_now() + step).clamp(0.0, (pb.duration - 1.0).max(0.0));
+                    self.media.send(MediaCmd::Seek(to));
+                    self.seek_flash = 1.6;
+                }
+            }
             KeyCode::KeyT => self.toast_t = 6.0,
             KeyCode::Space => self.media(MediaCmd::PlayPause),
             KeyCode::KeyN => self.media(MediaCmd::Next),
@@ -424,6 +437,7 @@ impl App {
 
         self.toast_t = (self.toast_t - dt).max(0.0);
         self.volume_flash = (self.volume_flash - dt).max(0.0);
+        self.seek_flash = (self.seek_flash - dt).max(0.0);
 
         // Audio -> visual state.
         // BLAZE_IGNORE_AUDIO=1 renders as if nothing is playing (for measuring the idle path).
@@ -433,12 +447,19 @@ impl App {
         // UI runs first: the docked sidebar decides how much of the window the scene gets.
         // egui only runs when something is on screen, so idle frames cost no UI work.
         let toast_alpha = (self.toast_t / 0.6).min(1.0).min((6.0 - self.toast_t) / 0.4).clamp(0.0, 1.0);
-        // Resting on the volume bar keeps the controls up.
-        let still = if self.ui.volume_hot { 0.0 } else { self.last_mouse_move.elapsed().as_secs_f32() };
+        // Resting on the volume bar or timeline keeps the controls up.
+        let still = if self.ui.controls_hot { 0.0 } else { self.last_mouse_move.elapsed().as_secs_f32() };
         let pointer_ok = self.mode != WindowMode::Overlay || self.show_sidebar;
         let controls_alpha = if pointer_ok { (1.0 - (still - 2.0) / 0.5).clamp(0.0, 1.0) } else { 0.0 };
         let volume_alpha = if self.settings.show_volume { controls_alpha.max((self.volume_flash / 0.4).min(1.0)) } else { 0.0 };
-        let need_ui = self.show_sidebar || (self.toast_t > 0.0 && self.settings.show_track_toast) || self.settings.show_stats || controls_alpha > 0.0 || volume_alpha > 0.0;
+        let has_timeline = self.settings.show_timeline && !self.track.title.is_empty() && self.track.playback.duration > 0.0;
+        let timeline_alpha = if has_timeline { controls_alpha.max((self.seek_flash / 0.4).min(1.0)) } else { 0.0 };
+        let need_ui = self.show_sidebar
+            || (self.toast_t > 0.0 && self.settings.show_track_toast)
+            || self.settings.show_stats
+            || controls_alpha > 0.0
+            || volume_alpha > 0.0
+            || timeline_alpha > 0.0;
         let drawer_was_open = self.ui.drawer.is_some();
         let mut actions = Vec::new();
         let mut egui_out = None;
@@ -470,6 +491,7 @@ impl App {
                         controls_alpha,
                         volume: &self.volume,
                         volume_alpha,
+                        timeline_alpha,
                     },
                 );
             });
@@ -561,7 +583,7 @@ impl App {
         }
         self.update_hittest();
 
-        self.idle = !drawer_open && controls_alpha <= 0.0 && volume_alpha <= 0.0 && self.toast_t <= 0.0 && self.vis.silent_for > 3.0;
+        self.idle = !drawer_open && controls_alpha <= 0.0 && volume_alpha <= 0.0 && timeline_alpha <= 0.0 && self.toast_t <= 0.0 && self.vis.silent_for > 3.0;
         self.stats.update();
         if self.trim_at.is_some_and(|t| Instant::now() >= t) {
             self.trim_at = None;
@@ -702,7 +724,9 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::KeyboardInput { event, .. } => {
                 let wants_kb = self.gfx.as_ref().is_some_and(|g| g.egui_ctx.wants_keyboard_input());
-                if event.state == ElementState::Pressed && !event.repeat && !wants_kb && !(consumed && event.physical_key != PhysicalKey::Code(KeyCode::F1)) {
+                // Holding an arrow key keeps changing the volume or seeking; other keys fire once.
+                let arrow = matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight));
+                if event.state == ElementState::Pressed && (!event.repeat || arrow) && !wants_kb && !(consumed && event.physical_key != PhysicalKey::Code(KeyCode::F1)) {
                     if let PhysicalKey::Code(code) = event.physical_key {
                         self.handle_key(code);
                     }
