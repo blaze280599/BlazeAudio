@@ -728,7 +728,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
-            WindowEvent::KeyboardInput { event, .. } => {
+            // Gaining focus replays keys still held as synthetic presses; coming back with
+            // Alt+Tab, that's a Tab, which would toggle the sidebar.
+            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 let wants_kb = self.gfx.as_ref().is_some_and(|g| g.egui_ctx.wants_keyboard_input());
                 // Holding an arrow key keeps changing the volume or seeking; other keys fire once.
                 let arrow = matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight));
