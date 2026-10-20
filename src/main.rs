@@ -4,6 +4,7 @@ mod audio;
 mod gpu;
 mod media;
 mod palette;
+mod scenes;
 mod settings;
 mod snapshot;
 mod sys;
@@ -27,7 +28,8 @@ use audio::{AudioEngine, AudioParams};
 use gpu::Gpu;
 use media::{MediaCmd, MediaWatcher, TrackInfo};
 use palette::PRESETS;
-use settings::{AutoScene, Scene, Settings, WindowGeom, WindowMode};
+use scenes::SceneId;
+use settings::{AutoScene, Settings, WindowGeom, WindowMode};
 use vis::VisState;
 
 pub fn make_instance() -> wgpu::Instance {
@@ -333,9 +335,31 @@ impl App {
             KeyCode::F11 | KeyCode::KeyF => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::Enter if alt => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::KeyO => self.toggle_mode(WindowMode::Overlay),
-            KeyCode::Digit1 => self.settings.visual = Scene::Terminal,
-            KeyCode::Digit2 => self.settings.visual = Scene::GradientAscii,
-            KeyCode::Digit3 => self.settings.visual = Scene::Scope,
+            KeyCode::Digit1
+            | KeyCode::Digit2
+            | KeyCode::Digit3
+            | KeyCode::Digit4
+            | KeyCode::Digit5
+            | KeyCode::Digit6
+            | KeyCode::Digit7
+            | KeyCode::Digit8
+            | KeyCode::Digit9 => {
+                let digits = [
+                    KeyCode::Digit1,
+                    KeyCode::Digit2,
+                    KeyCode::Digit3,
+                    KeyCode::Digit4,
+                    KeyCode::Digit5,
+                    KeyCode::Digit6,
+                    KeyCode::Digit7,
+                    KeyCode::Digit8,
+                    KeyCode::Digit9,
+                ];
+                let i = digits.iter().position(|d| *d == code).unwrap_or(0);
+                if let Some(id) = SceneId::ALL.get(i) {
+                    self.settings.visual = *id;
+                }
+            }
             KeyCode::ArrowUp | KeyCode::ArrowDown => {
                 self.volume.nudge(if code == KeyCode::ArrowUp { 0.02 } else { -0.02 });
                 self.volume_flash = 1.6;
@@ -519,7 +543,7 @@ impl App {
         }
         let overlay = self.mode == WindowMode::Overlay && g.gpu.transparent_ok;
         let globals = self.vis.globals(&self.settings, g.gpu.scene_size(), time, overlay);
-        g.gpu.upload(&globals, &self.vis.audio_buffer());
+        g.gpu.upload(&globals, &self.vis, &self.settings.scenes);
 
         let surface_tex = match g.gpu.surface.as_ref().unwrap().get_current_texture() {
             Ok(t) => t,

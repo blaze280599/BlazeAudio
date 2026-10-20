@@ -1,31 +1,23 @@
-//! wgpu (DX12) renderer: the active scene (Faulty Terminal, Gradient ASCII or Phosphor Scope)
-//! into an HDR target, bloom chain, ACES tonemap, egui.
+//! wgpu (DX12) renderer: the active scene (see `scenes`) into an HDR target, bloom chain,
+//! ACES tonemap, egui.
 
 use std::borrow::Cow;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::settings::Scene;
+use crate::scenes::{self, Params, Scene, SceneFrame, SceneId, SceneSettings};
+use crate::vis::VisState;
 
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const BLOOM_LEVELS: usize = 6;
-/// Phosphor Scope afterglow (beam intensity only; the palette is applied when compositing).
-const PERSIST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
-/// Bands, then the scope's waveform.
+/// Bands, then the waveform.
 pub const AUDIO_FLOATS: usize = 64 + crate::audio::WAVE_LEN;
 
 const COMMON: &str = include_str!("shaders/common.wgsl");
-const TERMINAL: &str = include_str!("shaders/terminal.wgsl");
-const ASCII: &str = include_str!("shaders/ascii.wgsl");
-const SCOPE: &str = include_str!("shaders/scope.wgsl");
-
-/// Characters for Gradient ASCII, dimmest to brightest.
-pub const ASCII_CHARS: &str = " =+xX0S8#@";
-const ATLAS_CELL_W: u32 = 60;
-const ATLAS_CELL_H: u32 = 100;
 const POST: &str = include_str!("shaders/post.wgsl");
 
-/// Must match `Globals` in common.wgsl.
+/// Shared by every scene; must match `Globals` in common.wgsl. A scene's own values go in its
+/// `Params` instead.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Default)]
 pub struct Globals {
@@ -50,21 +42,8 @@ pub struct Globals {
     pub energy: f32,
     pub beat_age: f32,
     pub scene_time: f32,
-    pub a_shape: f32,
-    pub a_cell: f32,
-    pub a_density: f32,
-    pub a_glyphs: f32,
-    pub a_gradient: f32,
-    pub a_count: f32,
-    pub s_mode: f32,
-    pub s_decay: f32,
-    pub s_beam: f32,
-    pub s_gain: f32,
-    pub s_trigger: f32,
-    pub s_points: f32,
     pub _pad: f32,
     pub pal: [[f32; 4]; 4],
-    pub pal_lab: [[f32; 4]; 4],
 }
 
 pub struct Tex {
@@ -73,7 +52,7 @@ pub struct Tex {
     pub view: wgpu::TextureView,
 }
 
-fn make_tex(device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat, label: &str) -> Tex {
+pub fn make_tex(device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat, label: &str) -> Tex {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
@@ -92,9 +71,6 @@ struct Targets {
     w: u32,
     h: u32,
     scene: Tex,
-    /// Phosphor Scope afterglow, ping-ponged each frame, and a bind group reading each.
-    persist: [Tex; 2],
-    bg_persist: [wgpu::BindGroup; 2],
     bloom: Vec<Tex>,
     /// Input of each bloom downsample level (level 0 reads the scene).
     bg_down: Vec<wgpu::BindGroup>,
@@ -103,12 +79,106 @@ struct Targets {
     bg_tonemap: wgpu::BindGroup,
 }
 
+/// Bind group layouts every pass shares.
+pub struct Layouts {
+    /// Globals, audio, sampler and the scene's `Params`.
+    pub g0: wgpu::BindGroupLayout,
+    /// One texture.
+    pub tex1: wgpu::BindGroupLayout,
+    /// Two textures.
+    pub tex2: wgpu::BindGroupLayout,
+}
+
+/// What a scene gets to build its pipelines and textures with.
+pub struct GpuCtx<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub layouts: &'a Layouts,
+}
+
+impl GpuCtx<'_> {
+    /// A shader module from `src`, with common.wgsl (globals, audio, helpers) prepended.
+    pub fn module(&self, name: &str, src: &str) -> wgpu::ShaderModule {
+        self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(name),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{COMMON}\n{src}"))),
+        })
+    }
+
+    /// Group 0 (globals), plus a one-texture group 1 when `tex1`.
+    pub fn layout(&self, tex1: bool) -> wgpu::PipelineLayout {
+        let l = self.layouts;
+        let groups: &[&wgpu::BindGroupLayout] = if tex1 { &[&l.g0, &l.tex1] } else { &[&l.g0] };
+        self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: groups, push_constant_ranges: &[] })
+    }
+
+    /// A full-screen triangle (`vs_full`) running fragment entry point `fs`.
+    pub fn fullscreen(
+        &self,
+        layout: &wgpu::PipelineLayout,
+        m: &wgpu::ShaderModule,
+        fs: &str,
+        format: wgpu::TextureFormat,
+        blend: Option<wgpu::BlendState>,
+    ) -> wgpu::RenderPipeline {
+        self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(fs),
+            layout: Some(layout),
+            vertex: wgpu::VertexState { module: m, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: m,
+                entry_point: Some(fs),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// A group 1 bind group reading `view`.
+    pub fn tex1(&self, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.layouts.tex1,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) }],
+        })
+    }
+}
+
+/// One full-screen triangle into `view`, with `g1` as group 1 if given.
+pub fn fullscreen_pass(
+    enc: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+    pipeline: &wgpu::RenderPipeline,
+    g0: &wgpu::BindGroup,
+    g1: Option<&wgpu::BindGroup>,
+) {
+    let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: None,
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, g0, &[]);
+    if let Some(g1) = g1 {
+        pass.set_bind_group(1, g1, &[]);
+    }
+    pass.draw(0..3, 0..1);
+}
+
 struct Pipelines {
-    terminal: wgpu::RenderPipeline,
-    ascii: wgpu::RenderPipeline,
-    scope_decay: wgpu::RenderPipeline,
-    scope_beam: wgpu::RenderPipeline,
-    scope: wgpu::RenderPipeline,
     down_first: wgpu::RenderPipeline,
     down: wgpu::RenderPipeline,
     up: wgpu::RenderPipeline,
@@ -128,18 +198,15 @@ pub struct Gpu {
 
     globals_buf: wgpu::Buffer,
     audio_buf: wgpu::Buffer,
+    params_buf: wgpu::Buffer,
     g0: wgpu::BindGroup,
-    tex1_layout: wgpu::BindGroupLayout,
-    tex2_layout: wgpu::BindGroupLayout,
+    layouts: Layouts,
     pipes: Pipelines,
-    /// Glyph atlas (with mips) for Gradient ASCII; owns the texture behind `bg_atlas`.
-    _atlas: wgpu::Texture,
-    bg_atlas: wgpu::BindGroup,
-    pub scene: Scene,
-    /// Scene drawn last frame; switching to the scope clears its stale afterglow.
-    last_scene: Scene,
-    /// Which `persist` texture holds the newest afterglow.
-    persist_idx: usize,
+    /// Every scene, in `SceneId::ALL` order.
+    scenes: Vec<Box<dyn Scene>>,
+    pub scene: SceneId,
+    /// Scene drawn last frame, so a scene knows when it has just come on.
+    last_scene: SceneId,
     targets: Targets,
     /// Area of the swapchain the scene is drawn into (x, y, w, h in physical pixels); the rest
     /// belongs to docked UI panels.
@@ -239,6 +306,12 @@ impl Gpu {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("scene params"),
+            size: scenes::PARAMS_BYTES as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let samp_clamp = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("clamp"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -290,6 +363,16 @@ impl Gpu {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: vis,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let g0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -299,6 +382,7 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: audio_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&samp_clamp) },
+                wgpu::BindGroupEntry { binding: 3, resource: params_buf.as_entire_binding() },
             ],
         });
         let tex1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -310,143 +394,43 @@ impl Gpu {
             entries: &[tex_entry(0), tex_entry(1)],
         });
 
+        let layouts = Layouts { g0: g0_layout, tex1: tex1_layout, tex2: tex2_layout };
+        let (tw, th) = scaled(width, height, render_scale);
+
         // ---- Pipelines (compiled in parallel; FXC is slow and single-threaded per shader) ----
-        let pipeline_layout = |layouts: &[&wgpu::BindGroupLayout]| {
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: layouts,
-                push_constant_ranges: &[],
-            })
-        };
-        let pl_g0 = pipeline_layout(&[&g0_layout]);
-        let pl_tex1 = pipeline_layout(&[&g0_layout, &tex1_layout]);
-        let pl_tex2 = pipeline_layout(&[&g0_layout, &tex2_layout]);
-
-        let module = |name: &str, src: &str| {
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(name),
-                source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{COMMON}\n{src}"))),
-            })
-        };
-        let m_terminal = module("terminal", TERMINAL);
-        let m_ascii = module("ascii", ASCII);
-        let m_scope = module("scope", SCOPE);
-        let m_post = module("post", POST);
-
-        let additive = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent::OVER,
-        };
-
-        let full = |layout: &wgpu::PipelineLayout,
-                    m: &wgpu::ShaderModule,
-                    fs: &str,
-                    format: wgpu::TextureFormat,
-                    blend: Option<wgpu::BlendState>| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(fs),
-                layout: Some(layout),
-                vertex: wgpu::VertexState {
-                    module: m,
-                    entry_point: Some("vs_full"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: m,
-                    entry_point: Some(fs),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
-                }),
-                multiview: None,
-                cache: None,
-            })
-        };
-
-        // Scope beam: one instanced quad per segment, max-blended so overlapping segments
-        // don't stack into a blown-out blob where the trace doubles back.
-        let beam = || {
-            let max = wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Max,
-            };
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("vs_beam"),
-                layout: Some(&pl_g0),
-                vertex: wgpu::VertexState {
-                    module: &m_scope,
-                    entry_point: Some("vs_beam"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &m_scope,
-                    entry_point: Some("fs_beam"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: PERSIST_FORMAT,
-                        blend: Some(wgpu::BlendState { color: max, alpha: max }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview: None,
-                cache: None,
-            })
-        };
-
-        let pipes = std::thread::scope(|s| {
-            let h_terminal = s.spawn(|| full(&pl_g0, &m_terminal, "fs_terminal", HDR_FORMAT, None));
-            let h_ascii = s.spawn(|| full(&pl_tex1, &m_ascii, "fs_ascii", HDR_FORMAT, None));
-            let h_scope = s.spawn(|| {
-                let decay = full(&pl_tex1, &m_scope, "fs_decay", PERSIST_FORMAT, None);
-                let scope = full(&pl_tex1, &m_scope, "fs_scope", HDR_FORMAT, None);
-                (decay, beam(), scope)
+        let ctx = GpuCtx { device: &device, queue: &queue, layouts: &layouts };
+        let (pipes, scenes) = std::thread::scope(|s| {
+            let ctx = &ctx;
+            let h_scenes: Vec<_> = SceneId::ALL.iter().map(|id| s.spawn(move || id.build(ctx, (tw, th)))).collect();
+            let h_post = s.spawn(move || {
+                let additive = wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent::OVER,
+                };
+                let m = ctx.module("post", POST);
+                let pl_tex1 = ctx.layout(true);
+                let pl_tex2 = ctx.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[&ctx.layouts.g0, &ctx.layouts.tex2],
+                    push_constant_ranges: &[],
+                });
+                Pipelines {
+                    down_first: ctx.fullscreen(&pl_tex1, &m, "fs_down_first", HDR_FORMAT, None),
+                    down: ctx.fullscreen(&pl_tex1, &m, "fs_down", HDR_FORMAT, None),
+                    up: ctx.fullscreen(&pl_tex1, &m, "fs_up", HDR_FORMAT, Some(additive)),
+                    tonemap: ctx.fullscreen(&pl_tex2, &m, "fs_tonemap", view_format, None),
+                }
             });
-            let h_post = s.spawn(|| {
-                let down_first = full(&pl_tex1, &m_post, "fs_down_first", HDR_FORMAT, None);
-                let down = full(&pl_tex1, &m_post, "fs_down", HDR_FORMAT, None);
-                let up = full(&pl_tex1, &m_post, "fs_up", HDR_FORMAT, Some(additive));
-                let tonemap = full(&pl_tex2, &m_post, "fs_tonemap", view_format, None);
-                (down_first, down, up, tonemap)
-            });
-            let (down_first, down, up, tonemap) = h_post.join().unwrap();
-            let (scope_decay, scope_beam, scope) = h_scope.join().unwrap();
-            Pipelines {
-                terminal: h_terminal.join().unwrap(),
-                ascii: h_ascii.join().unwrap(),
-                scope_decay,
-                scope_beam,
-                scope,
-                down_first,
-                down,
-                up,
-                tonemap,
-            }
-        });
-
-        let atlas = build_atlas(&device, &queue);
-        let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
-        let bg_atlas = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("atlas"),
-            layout: &tex1_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&atlas_view) }],
+            let scenes = h_scenes.into_iter().map(|h| h.join().unwrap()).collect();
+            (h_post.join().unwrap(), scenes)
         });
 
         let egui = egui_wgpu::Renderer::new(&device, view_format, egui_wgpu::RendererOptions::default());
-
-        let (tw, th) = scaled(width, height, render_scale);
-        let targets = build_targets(&device, &tex1_layout, &tex2_layout, tw, th);
+        let targets = build_targets(&device, &layouts, tw, th);
 
         Ok(Self {
             device,
@@ -459,15 +443,13 @@ impl Gpu {
             render_scale,
             globals_buf,
             audio_buf,
+            params_buf,
             g0,
-            tex1_layout,
-            tex2_layout,
+            layouts,
             pipes,
-            _atlas: atlas,
-            bg_atlas,
-            scene: Scene::Terminal,
-            last_scene: Scene::Terminal,
-            persist_idx: 0,
+            scenes,
+            scene: SceneId::ALL[0],
+            last_scene: SceneId::ALL[0],
             targets,
             viewport: [0, 0, width.max(1), height.max(1)],
             egui,
@@ -510,7 +492,11 @@ impl Gpu {
     fn rebuild_targets(&mut self) {
         let (tw, th) = scaled(self.viewport[2], self.viewport[3], self.render_scale);
         if tw != self.targets.w || th != self.targets.h {
-            self.targets = build_targets(&self.device, &self.tex1_layout, &self.tex2_layout, tw, th);
+            self.targets = build_targets(&self.device, &self.layouts, tw, th);
+            let ctx = GpuCtx { device: &self.device, queue: &self.queue, layouts: &self.layouts };
+            for s in &mut self.scenes {
+                s.resize(&ctx, (tw, th));
+            }
         }
     }
 
@@ -518,89 +504,30 @@ impl Gpu {
         (self.targets.w, self.targets.h)
     }
 
-    pub fn upload(&self, globals: &Globals, audio: &[f32; AUDIO_FLOATS]) {
+    /// This frame's shared globals, the audio data and the active scene's `Params`.
+    pub fn upload(&mut self, globals: &Globals, vis: &VisState, settings: &SceneSettings) {
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(globals));
-        self.queue.write_buffer(&self.audio_buf, 0, bytemuck::cast_slice(audio));
-    }
-
-    fn fullscreen_pass(
-        enc: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        load: wgpu::LoadOp<wgpu::Color>,
-        pipeline: &wgpu::RenderPipeline,
-        g0: &wgpu::BindGroup,
-        g1: Option<&wgpu::BindGroup>,
-    ) {
-        let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, g0, &[]);
-        if let Some(g1) = g1 {
-            pass.set_bind_group(1, g1, &[]);
-        }
-        pass.draw(0..3, 0..1);
+        self.queue.write_buffer(&self.audio_buf, 0, bytemuck::cast_slice(&vis.audio_buffer()));
+        let mut p = Params::default();
+        self.scenes[self.scene.index()].params(vis, settings, &mut p);
+        self.queue.write_buffer(&self.params_buf, 0, p.bytes());
     }
 
     /// Encode a full frame: scene -> bloom -> tonemap into `out`.
     pub fn encode(&mut self, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView, overlay: bool) {
         let fresh = self.scene != self.last_scene;
         self.last_scene = self.scene;
-        if self.scene == Scene::Scope {
-            self.persist_idx ^= 1;
-        }
         let t = &self.targets;
         let black = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
-        match self.scene {
-            Scene::Terminal => Self::fullscreen_pass(enc, &t.scene.view, black, &self.pipes.terminal, &self.g0, None),
-            Scene::GradientAscii => {
-                Self::fullscreen_pass(enc, &t.scene.view, black, &self.pipes.ascii, &self.g0, Some(&self.bg_atlas))
-            }
-            Scene::Scope => {
-                let (cur, prev) = (self.persist_idx, self.persist_idx ^ 1);
-                // Afterglow: last frame faded (or nothing, right after switching here)...
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("scope"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &t.persist[cur].view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations { load: black, store: wgpu::StoreOp::Store },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-                pass.set_bind_group(0, &self.g0, &[]);
-                if !fresh {
-                    pass.set_pipeline(&self.pipes.scope_decay);
-                    pass.set_bind_group(1, &t.bg_persist[prev], &[]);
-                    pass.draw(0..3, 0..1);
-                }
-                // ...then this frame's beam on top.
-                pass.set_pipeline(&self.pipes.scope_beam);
-                pass.draw(0..6, 0..crate::audio::WAVE_LEN as u32 - 1);
-                drop(pass);
-                Self::fullscreen_pass(enc, &t.scene.view, black, &self.pipes.scope, &self.g0, Some(&t.bg_persist[cur]));
-            }
-        }
+        self.scenes[self.scene.index()].encode(enc, &SceneFrame { target: &t.scene.view, g0: &self.g0, fresh });
 
         // Bloom: progressive downsample, then tent upsample accumulating back up the chain.
         for i in 0..BLOOM_LEVELS {
             let p = if i == 0 { &self.pipes.down_first } else { &self.pipes.down };
-            Self::fullscreen_pass(enc, &t.bloom[i].view, black, p, &self.g0, Some(&t.bg_down[i]));
+            fullscreen_pass(enc, &t.bloom[i].view, black, p, &self.g0, Some(&t.bg_down[i]));
         }
         for i in (1..BLOOM_LEVELS).rev() {
-            Self::fullscreen_pass(enc, &t.bloom[i - 1].view, wgpu::LoadOp::Load, &self.pipes.up, &self.g0, Some(&t.bg_up[i]));
+            fullscreen_pass(enc, &t.bloom[i - 1].view, wgpu::LoadOp::Load, &self.pipes.up, &self.g0, Some(&t.bg_up[i]));
         }
 
         // Tonemap into the scene viewport. Outside it (behind docked panels) stays transparent
@@ -721,72 +648,12 @@ impl Gpu {
     }
 }
 
-/// Rasterize `ASCII_CHARS` (Hack, from egui's bundled fonts) into one row of 60x100 cells,
-/// coverage in R, with a full mip chain so small cells stay smooth.
-fn build_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
-    use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
-
-    let chars: Vec<char> = ASCII_CHARS.chars().collect();
-    let (w, h) = (ATLAS_CELL_W * chars.len() as u32, ATLAS_CELL_H);
-    let mut px = vec![0u8; (w * h) as usize];
-    let font = FontRef::try_from_slice(epaint_default_fonts::HACK_REGULAR).expect("bundled font");
-    let sf = font.as_scaled(PxScale::from(ATLAS_CELL_H as f32 * 0.78));
-    // Centre the em box vertically, like canvas `textBaseline = middle`.
-    let baseline = ATLAS_CELL_H as f32 / 2.0 + (sf.ascent() + sf.descent()) / 2.0;
-    for (i, &ch) in chars.iter().enumerate() {
-        let id = font.glyph_id(ch);
-        let x0 = (i as u32 * ATLAS_CELL_W) as f32 + (ATLAS_CELL_W as f32 - sf.h_advance(id)) / 2.0;
-        let glyph = id.with_scale_and_position(sf.scale(), ab_glyph::point(x0, baseline));
-        if let Some(outline) = font.outline_glyph(glyph) {
-            let b = outline.px_bounds();
-            outline.draw(|gx, gy, c| {
-                let (x, y) = (b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32);
-                if x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h {
-                    let p = &mut px[(y as u32 * w + x as u32) as usize];
-                    *p = (*p).max((c.clamp(0.0, 1.0) * 255.0) as u8);
-                }
-            });
-        }
-    }
-
-    let mips = 32 - w.max(h).leading_zeros();
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("ascii atlas"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        mip_level_count: mips,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let base = image::GrayImage::from_raw(w, h, px).expect("atlas size");
-    for level in 0..mips {
-        let (lw, lh) = ((w >> level).max(1), (h >> level).max(1));
-        let img = if level == 0 { base.clone() } else { image::imageops::resize(&base, lw, lh, image::imageops::FilterType::Triangle) };
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            img.as_raw(),
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(lw), rows_per_image: None },
-            wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 },
-        );
-    }
-    tex
-}
-
 fn scaled(w: u32, h: u32, s: f32) -> (u32, u32) {
     (((w as f32 * s) as u32).max(16), ((h as f32 * s) as u32).max(16))
 }
 
-fn build_targets(
-    device: &wgpu::Device,
-    tex1: &wgpu::BindGroupLayout,
-    tex2: &wgpu::BindGroupLayout,
-    w: u32,
-    h: u32,
-) -> Targets {
+fn build_targets(device: &wgpu::Device, layouts: &Layouts, w: u32, h: u32) -> Targets {
     let scene = make_tex(device, w, h, HDR_FORMAT, "scene");
-    let persist = [make_tex(device, w, h, PERSIST_FORMAT, "persist"), make_tex(device, w, h, PERSIST_FORMAT, "persist")];
     let bloom: Vec<Tex> = (0..BLOOM_LEVELS)
         .map(|i| make_tex(device, (w >> (i + 1)).max(1), (h >> (i + 1)).max(1), HDR_FORMAT, "bloom"))
         .collect();
@@ -794,7 +661,7 @@ fn build_targets(
     let bg1 = |v: &wgpu::TextureView| {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
-            layout: tex1,
+            layout: &layouts.tex1,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(v) }],
         })
     };
@@ -802,14 +669,13 @@ fn build_targets(
         .map(|i| if i == 0 { bg1(&scene.view) } else { bg1(&bloom[i - 1].view) })
         .collect();
     let bg_up = (0..BLOOM_LEVELS).map(|i| bg1(&bloom[i].view)).collect();
-    let bg_persist = [bg1(&persist[0].view), bg1(&persist[1].view)];
     let bg_tonemap = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
-        layout: tex2,
+        layout: &layouts.tex2,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scene.view) },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&bloom[0].view) },
         ],
     });
-    Targets { w, h, scene, persist, bg_persist, bloom, bg_down, bg_up, bg_tonemap }
+    Targets { w, h, scene, bloom, bg_down, bg_up, bg_tonemap }
 }

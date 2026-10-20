@@ -4,9 +4,9 @@
 use std::time::Instant;
 
 use crate::audio::{AudioFrame, NUM_BANDS, WAVE_LEN};
-use crate::gpu::{Globals, ASCII_CHARS, AUDIO_FLOATS};
-use crate::palette::{linear_to_oklab, Palette};
-use crate::settings::{AsciiShape, ScopeMode, Settings};
+use crate::gpu::{Globals, AUDIO_FLOATS};
+use crate::palette::Palette;
+use crate::settings::Settings;
 
 pub struct VisState {
     pub bands: [f32; NUM_BANDS],
@@ -25,13 +25,12 @@ pub struct VisState {
     pub pal_target: Palette,
     pub silent_for: f32,
     first: bool,
-    /// Scope waveform, faded out when the capture goes quiet.
-    wave: [f32; WAVE_LEN],
+    /// Waveform, faded out when the capture goes quiet.
+    pub wave: [f32; WAVE_LEN],
     /// 1 while audio is arriving, eases to 0 when it stops (dims the scope beam to a dot).
     live: f32,
-    /// First sample of the triggered Y-T sweep.
-    trigger: usize,
-    dt: f32,
+    /// Length of the last frame in seconds.
+    pub dt: f32,
 }
 
 impl VisState {
@@ -53,7 +52,6 @@ impl VisState {
             first: true,
             wave: [0.0; WAVE_LEN],
             live: 0.0,
-            trigger: 0,
             dt: 1.0 / 60.0,
         }
     }
@@ -103,20 +101,24 @@ impl VisState {
             }
         }
 
-        // Scope: hold the last window but shrink it to the centre once the capture stops, so
+        // Waveform: hold the last window but shrink it to the centre once the capture stops, so
         // a paused track leaves a resting dot instead of a frozen trace.
         self.dt = dt;
         self.live += ((if stale { 0.0 } else { 1.0 }) - self.live) * if stale { kz } else { k(0.03) };
         for i in 0..WAVE_LEN {
             self.wave[i] = f.wave[i] * self.live;
         }
-        self.trigger = trigger(&self.wave);
 
         if stale || f.level < 1e-4 {
             self.silent_for += dt;
         } else {
             self.silent_for = 0.0;
         }
+    }
+
+    /// The palette on screen (mid-crossfade while it changes).
+    pub fn palette(&self) -> Palette {
+        self.pal_cur
     }
 
     pub fn audio_buffer(&self) -> [f32; AUDIO_FLOATS] {
@@ -132,21 +134,6 @@ impl VisState {
         for i in 0..4 {
             pal[i] = [self.pal_cur[i][0], self.pal_cur[i][1], self.pal_cur[i][2], 1.0];
         }
-        // Gradient ASCII ramp: the same colours in Oklab, from the edge of the shadow (darkest)
-        // to the brightest point.
-        let mut ramp = self.pal_cur;
-        ramp.sort_by(|a, b| crate::palette::luminance(*a).total_cmp(&crate::palette::luminance(*b)));
-        let mut pal_lab = [[0.0f32; 4]; 4];
-        for i in 0..4 {
-            let l = linear_to_oklab(ramp[i]);
-            pal_lab[i] = [l[0], l[1], l[2], 0.0];
-        }
-        let shape = match s.ascii_shape {
-            AsciiShape::Horizon => 0.0,
-            AsciiShape::Pinch => 1.0,
-            AsciiShape::Rise => 2.0,
-            AsciiShape::Eclipse => 3.0,
-        };
         Globals {
             res: [w, h],
             inv_res: [1.0 / w, 1.0 / h],
@@ -169,39 +156,8 @@ impl VisState {
             energy: self.energy,
             beat_age: self.beat_age,
             scene_time: self.scene_time,
-            a_shape: shape,
-            a_cell: s.ascii_cell,
-            a_density: s.ascii_density,
-            a_glyphs: s.ascii_glyphs,
-            a_gradient: s.ascii_gradient,
-            a_count: ASCII_CHARS.chars().count() as f32,
-            s_mode: match s.scope_mode {
-                ScopeMode::Yt => 0.0,
-                ScopeMode::Polar => 1.0,
-            },
-            // Afterglow per frame; louder passages leave longer trails.
-            s_decay: (-self.dt / (s.scope_persistence * (1.0 + self.energy * 0.6)).max(1e-3)).exp(),
-            s_beam: s.scope_beam,
-            s_gain: s.scope_gain,
-            s_trigger: self.trigger as f32,
-            s_points: (WAVE_LEN / 2) as f32,
             _pad: 0.0,
             pal,
-            pal_lab,
         }
     }
-}
-
-/// Start of a stable Y-T sweep: the first rising zero crossing in the first half of the window
-/// that comes out of a clearly negative stretch (so noise around zero doesn't retrigger).
-fn trigger(wave: &[f32; WAVE_LEN]) -> usize {
-    let mut armed = false;
-    for i in 1..WAVE_LEN / 2 {
-        if wave[i] < -0.05 {
-            armed = true;
-        } else if armed && wave[i - 1] < 0.0 && wave[i] >= 0.0 {
-            return i;
-        }
-    }
-    0
 }

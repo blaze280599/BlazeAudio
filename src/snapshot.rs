@@ -7,7 +7,8 @@ use std::time::Instant;
 use crate::audio::Offline;
 use crate::gpu::Gpu;
 use crate::palette::{self, PRESETS};
-use crate::settings::{AsciiShape, Scene, ScopeMode, Settings};
+use crate::scenes::SceneId;
+use crate::settings::Settings;
 use crate::vis::VisState;
 
 const SR: f32 = 48_000.0;
@@ -163,7 +164,7 @@ pub fn run(dir: &Path) {
         time += dt;
         vis.update(&f, dt, Instant::now());
         let g = vis.globals(settings, gpu.scene_size(), time, false);
-        gpu.upload(&g, &vis.audio_buffer());
+        gpu.upload(&g, vis, &settings.scenes);
         if capture {
             Some(gpu.capture())
         } else {
@@ -212,8 +213,8 @@ pub fn run(dir: &Path) {
     }
 
     // Gradient ASCII: time it, then one frame per shape once the intro has finished.
-    gpu.scene = Scene::GradientAscii;
-    settings.visual = Scene::GradientAscii;
+    gpu.scene = SceneId::GradientAscii;
+    settings.visual = SceneId::GradientAscii;
     vis.scene_time = 0.0;
     let t = Instant::now();
     for _ in 0..150 {
@@ -222,8 +223,9 @@ pub fn run(dir: &Path) {
     let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     let ms = t.elapsed().as_secs_f32() * 1000.0 / 150.0;
     report += &format!("render (gradient ascii): {ms:.2} ms/frame (CPU+GPU, 1280x720, unthrottled)\n");
-    for (shape, name) in [(AsciiShape::Horizon, "horizon"), (AsciiShape::Pinch, "pinch"), (AsciiShape::Rise, "rise"), (AsciiShape::Eclipse, "eclipse")] {
-        settings.ascii_shape = shape;
+    use crate::scenes::ascii::Shape;
+    for (shape, name) in [(Shape::Horizon, "horizon"), (Shape::Pinch, "pinch"), (Shape::Rise, "rise"), (Shape::Eclipse, "eclipse")] {
+        settings.scenes.ascii.shape = shape;
         for _ in 0..20 {
             step(&mut gpu, &mut vis, &settings, false);
         }
@@ -238,8 +240,8 @@ pub fn run(dir: &Path) {
     }
 
     // Phosphor Scope: time it, then one frame per mode (afterglow needs a few frames to build).
-    gpu.scene = Scene::Scope;
-    settings.visual = Scene::Scope;
+    gpu.scene = SceneId::Scope;
+    settings.visual = SceneId::Scope;
     vis.scene_time = 0.0;
     let t = Instant::now();
     for _ in 0..150 {
@@ -248,8 +250,9 @@ pub fn run(dir: &Path) {
     let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     let ms = t.elapsed().as_secs_f32() * 1000.0 / 150.0;
     report += &format!("render (phosphor scope): {ms:.2} ms/frame (CPU+GPU, 1280x720, unthrottled)\n");
-    for (mode, name) in [(ScopeMode::Yt, "yt"), (ScopeMode::Polar, "polar")] {
-        settings.scope_mode = mode;
+    use crate::scenes::scope::Mode;
+    for (mode, name) in [(Mode::Yt, "yt"), (Mode::Polar, "polar")] {
+        settings.scenes.scope.mode = mode;
         for _ in 0..20 {
             step(&mut gpu, &mut vis, &settings, false);
         }

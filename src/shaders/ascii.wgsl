@@ -3,6 +3,14 @@
 // edge follows the spectrum, hats make the glyphs flicker, and each beat sends a ring of
 // scrambled characters out from the light. Fades in from its source while the glyphs decode.
 
+struct Params {
+  shape: f32, cell: f32, density: f32, glyphs: f32,
+  gradient: f32, count: f32, _pad0: f32, _pad1: f32,
+  // Palette in Oklab, sorted darkest to brightest (the gradient ramp).
+  pal_lab: array<vec4f, 4>,
+};
+
+@group(0) @binding(3) var<uniform> P: Params;
 @group(1) @binding(0) var atlas: texture_2d<f32>;
 
 // Glyph cells in the atlas are 60x100 px, laid out in one row.
@@ -96,7 +104,7 @@ fn eclipse(p: vec2f, time: f32, aspect: f32) -> vec4f {
 fn tone(t: f32) -> vec4f {
   let x = smoothstep(0.3, 1.0, t) * 3.0;
   let i = min(i32(floor(x)), 2);
-  return vec4f(mix(G.pal_lab[i].xyz, G.pal_lab[i + 1].xyz, x - f32(i)), smoothstep(0.0, 0.38, t));
+  return vec4f(mix(P.pal_lab[i].xyz, P.pal_lab[i + 1].xyz, x - f32(i)), smoothstep(0.0, 0.38, t));
 }
 
 struct Field {
@@ -112,7 +120,7 @@ fn field(p: vec2f, aspect: f32) -> Field {
     gnoise(q * 1.6 + vec2f(0.0, time * 0.3)),
     gnoise(q * 1.6 + vec2f(4.3, -time * 0.24))
   ) - 0.5;
-  let shape_id = i32(G.a_shape);
+  let shape_id = i32(P.shape);
   q += warp * (0.5 + 0.4 * G.energy) * select(0.18, 0.04, shape_id == 3);
   var sh: vec4f;
   if (shape_id == 0) {
@@ -141,7 +149,7 @@ fn field(p: vec2f, aspect: f32) -> Field {
 
 // Where each beat's ring of scrambled glyphs starts, per shape.
 fn light_source() -> vec2f {
-  let shape_id = i32(G.a_shape);
+  let shape_id = i32(P.shape);
   if (shape_id == 0) { return vec2f(0.0, -0.2); }
   if (shape_id == 2) { return vec2f(0.0, -0.55); }
   return vec2f(0.0);
@@ -152,13 +160,13 @@ fn fs_ascii(in: VsOut) -> @location(0) vec4f {
   let aspect = G.res.x * G.inv_res.y;
   // y-up pixel coordinates, so the light sits the same way up as the original.
   let frag = vec2f(in.pos.x, G.res.y - in.pos.y);
-  let cell_h = max(6.0, G.a_cell * G.res.y / 1080.0);
+  let cell_h = max(6.0, P.cell * G.res.y / 1080.0);
   let csize = vec2f(cell_h * CELL_ASPECT, cell_h);
   let offset = (G.res - ceil(G.res / csize) * csize) * 0.5;
   let coord = (frag - offset) / csize;
   let cell = floor(coord);
   let local = coord - cell;
-  let count = G.a_count;
+  let count = P.count;
   // Derivatives of the continuous coordinate, so mip selection doesn't jump at cell edges.
   let gx = dpdx(coord) / vec2f(count, 1.0);
   let gy = dpdy(coord) / vec2f(count, 1.0);
@@ -191,16 +199,16 @@ fn fs_ascii(in: VsOut) -> @location(0) vec4f {
     }
   }
 
-  let present = step(pick, G.a_density * mix(1.0, 0.3 + tn * 1.1, 0.55));
+  let present = step(pick, P.density * mix(1.0, 0.3 + tn * 1.1, 0.55));
   let cutoff = smoothstep(0.03, 0.1, value);
   let uv = vec2f((index + local.x) / count, 1.0 - local.y);
   let coverage = textureSampleGrad(atlas, samp_clamp, uv, gx, gy).r;
-  let ga = G.a_glyphs * present * cutoff * coverage * mix(1.0, 0.35 + 0.65 * level, 0.55);
+  let ga = P.glyphs * present * cutoff * coverage * mix(1.0, 0.35 + 0.65 * level, 0.55);
 
   // Glyphs carry the light's own hue, pushed into HDR so the bright ones bloom.
   let gain = 0.75 + 0.6 * G.energy * G.intensity + 0.4 * G.kick * G.intensity;
   let hue = fc.col / max(fc.alpha, 1e-3);
-  var col = bg.col * G.a_gradient * gain * 0.55;
+  var col = bg.col * P.gradient * gain * 0.55;
   col += hue * ga * (0.35 + 1.4 * value) * gain * 1.6;
   col += pal(3) * 0.01;
   return vec4f(col, 1.0);

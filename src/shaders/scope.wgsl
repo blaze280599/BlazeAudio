@@ -6,21 +6,27 @@
 // Passes: fs_decay (afterglow, prev -> cur), vs_beam/fs_beam (segments, max-blended into cur),
 // fs_scope (cur -> HDR scene).
 
+struct Params {
+  mode: f32, decay: f32, beam: f32, gain: f32,
+  trigger: f32, points: f32, _pad0: f32, _pad1: f32,
+};
+
+@group(0) @binding(3) var<uniform> P: Params;
 @group(1) @binding(0) var t_persist: texture_2d<f32>;
 
 // Beam half-width in pixels: the setting is for 1440p; energy thickens it a little.
 fn beam_width() -> f32 {
-  return max(0.8, G.s_beam * 0.5 * G.res.y / 1440.0 * (0.8 + G.energy * 0.5));
+  return max(0.8, P.beam * 0.5 * G.res.y / 1440.0 * (0.8 + G.energy * 0.5));
 }
 
 // Point `i` of the trace in pixels (y down).
 fn scope_point(i: u32) -> vec2f {
-  let n = max(G.s_points, 2.0);
-  let mode = u32(G.s_mode);
-  let idx = min(u32(G.s_trigger) + i, WAVE_LEN - 1u);
+  let n = max(P.points, 2.0);
+  let mode = u32(P.mode);
+  let idx = min(u32(P.trigger) + i, WAVE_LEN - 1u);
   // Beats punch the trace outward, hats shake the beam.
   let punch = 1.0 + G.kick * G.intensity * 0.1;
-  let g = G.s_gain * punch;
+  let g = P.gain * punch;
   let jitter = (hash11(f32(i) * 1.7 + fract(G.time) * 911.0) - 0.5) * G.hat * G.intensity * 0.025;
   let m = tanh(A.wave[idx] * g) + jitter;
   let t = f32(i) / (n - 1.0);
@@ -48,7 +54,7 @@ struct BeamOut {
 @vertex
 fn vs_beam(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> BeamOut {
   var o: BeamOut;
-  if (f32(ii + 1u) >= G.s_points) {
+  if (f32(ii + 1u) >= P.points) {
     o.pos = vec4f(2.0, 2.0, 0.0, 1.0);
     return o;
   }
@@ -88,7 +94,7 @@ fn fs_beam(in: BeamOut) -> @location(0) vec4f {
 
 @fragment
 fn fs_decay(in: VsOut) -> @location(0) vec4f {
-  let v = textureLoad(t_persist, vec2i(in.pos.xy), 0).r * G.s_decay;
+  let v = textureLoad(t_persist, vec2i(in.pos.xy), 0).r * P.decay;
   return vec4f(v, 0.0, 0.0, 1.0);
 }
 

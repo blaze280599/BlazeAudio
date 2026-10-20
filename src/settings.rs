@@ -1,49 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::scenes::{SceneId, SceneSettings};
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum WindowMode {
     Windowed,
     Fullscreen,
     Overlay,
-}
-
-/// Which visual is on screen.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
-pub enum Scene {
-    Terminal,
-    GradientAscii,
-    Scope,
-}
-
-impl Scene {
-    pub const ALL: [Scene; 3] = [Scene::Terminal, Scene::GradientAscii, Scene::Scope];
-
-    /// The scene after this one, wrapping around.
-    pub fn next(self) -> Scene {
-        let i = Self::ALL.iter().position(|s| *s == self).unwrap_or(0);
-        Self::ALL[(i + 1) % Self::ALL.len()]
-    }
-}
-
-/// How Phosphor Scope plots the waveform (order matches the shader).
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
-pub enum ScopeMode {
-    /// Classic time sweep, triggered on a rising zero crossing. Also read for the X-Y mode
-    /// earlier builds had, so their settings files still load.
-    #[serde(alias = "Xy")]
-    Yt,
-    /// The sweep wrapped around a slowly turning circle.
-    Polar,
-}
-
-/// Light shape for the Gradient ASCII scene (order matches the shader).
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
-pub enum AsciiShape {
-    Horizon,
-    Pinch,
-    Rise,
-    Eclipse,
 }
 
 /// When to move on to the next scene by itself.
@@ -78,20 +42,11 @@ pub enum UiTheme {
 #[serde(default)]
 pub struct Settings {
     /// Not `scene`: older builds stored a numeric scene index under that name.
-    pub visual: Scene,
+    pub visual: SceneId,
     pub auto_scene: AutoScene,
     pub auto_scene_minutes: f32,
-    pub ascii_shape: AsciiShape,
-    pub ascii_cell: f32,
-    pub ascii_density: f32,
-    pub ascii_glyphs: f32,
-    pub ascii_gradient: f32,
-    pub scope_mode: ScopeMode,
-    /// Afterglow time constant in seconds.
-    pub scope_persistence: f32,
-    /// Beam width in pixels at 1440p.
-    pub scope_beam: f32,
-    pub scope_gain: f32,
+    /// Each scene's own settings.
+    pub scenes: SceneSettings,
 
     pub intensity: f32,
     pub bloom_strength: f32,
@@ -128,18 +83,10 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            visual: Scene::Terminal,
+            visual: SceneId::ALL[0],
             auto_scene: AutoScene::Off,
             auto_scene_minutes: 5.0,
-            ascii_shape: AsciiShape::Horizon,
-            ascii_cell: 18.0,
-            ascii_density: 0.8,
-            ascii_glyphs: 0.85,
-            ascii_gradient: 0.9,
-            scope_mode: ScopeMode::Yt,
-            scope_persistence: 0.08,
-            scope_beam: 3.0,
-            scope_gain: 1.0,
+            scenes: SceneSettings::default(),
             intensity: 1.0,
             bloom_strength: 0.9,
             bloom_threshold: 0.75,
@@ -179,7 +126,11 @@ impl Settings {
         path()
             .and_then(|p| std::fs::read_to_string(p).ok())
             // Tolerate a UTF-8 BOM (e.g. after hand-editing with Windows tools).
-            .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s.trim_start_matches('\u{feff}')).ok())
+            .and_then(|mut v| {
+                migrate(&mut v);
+                serde_json::from_value(v).ok()
+            })
             .unwrap_or_default()
     }
 
@@ -207,15 +158,7 @@ impl Settings {
 
     /// Takes the look (what Randomize and Reset change) from `d`; scene and render scale stay.
     pub fn copy_look(&mut self, d: &Settings) {
-        self.ascii_shape = d.ascii_shape;
-        self.ascii_cell = d.ascii_cell;
-        self.ascii_density = d.ascii_density;
-        self.ascii_glyphs = d.ascii_glyphs;
-        self.ascii_gradient = d.ascii_gradient;
-        self.scope_mode = d.scope_mode;
-        self.scope_persistence = d.scope_persistence;
-        self.scope_beam = d.scope_beam;
-        self.scope_gain = d.scope_gain;
+        self.scenes = d.scenes.clone();
         self.intensity = d.intensity;
         self.bloom_strength = d.bloom_strength;
         self.bloom_threshold = d.bloom_threshold;
@@ -240,16 +183,7 @@ impl Settings {
         };
         let mut r = |lo: f32, hi: f32| lo + (hi - lo) * next();
 
-        self.ascii_shape = [AsciiShape::Horizon, AsciiShape::Pinch, AsciiShape::Rise, AsciiShape::Eclipse][(r(0.0, 4.0) as usize).min(3)];
-        self.ascii_cell = r(10.0, 32.0).round();
-        self.ascii_density = r(0.5, 1.0);
-        self.ascii_glyphs = r(0.6, 1.0);
-        self.ascii_gradient = r(0.6, 1.0);
-        self.scope_mode = if r(0.0, 1.0) < 0.5 { ScopeMode::Yt } else { ScopeMode::Polar };
-        // Log-uniform, so short and long afterglows are equally likely.
-        self.scope_persistence = 0.04 * 15f32.powf(r(0.0, 1.0));
-        self.scope_beam = r(1.5, 6.0);
-        self.scope_gain = r(0.7, 1.6);
+        self.scenes.randomize(&mut r);
         self.intensity = r(0.7, 1.6);
         self.bloom_strength = r(0.4, 1.8);
         self.bloom_threshold = r(0.4, 1.2);
@@ -257,5 +191,56 @@ impl Settings {
         self.chromatic = r(0.0, 1.2);
         self.grain = r(0.0, 0.8);
         self.vignette = r(0.2, 0.8);
+    }
+}
+
+/// Older builds kept scene settings at the top level with a scene prefix (`ascii_cell`,
+/// `scope_gain`, ...). Move them into `scenes` so those files keep their values. New scenes
+/// store under `scenes` from the start and never need an entry here.
+fn migrate(v: &mut serde_json::Value) {
+    let Some(root) = v.as_object_mut() else { return };
+    for (prefix, scene) in [("ascii_", "ascii"), ("scope_", "scope")] {
+        let keys: Vec<String> = root.keys().filter(|k| k.starts_with(prefix)).cloned().collect();
+        if keys.is_empty() {
+            continue;
+        }
+        let mut moved = serde_json::Map::new();
+        for k in keys {
+            if let Some(val) = root.remove(&k) {
+                moved.insert(k[prefix.len()..].to_owned(), val);
+            }
+        }
+        let scenes = root.entry("scenes").or_insert_with(|| serde_json::json!({}));
+        if let Some(scenes) = scenes.as_object_mut() {
+            scenes.entry(scene).or_insert(serde_json::Value::Object(moved));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrates_flat_scene_settings() {
+        let old = r#"{"visual":"Scope","ascii_shape":"Rise","ascii_cell":24.0,"scope_mode":"Xy","scope_gain":1.5,"intensity":1.2}"#;
+        let mut v: serde_json::Value = serde_json::from_str(old).unwrap();
+        migrate(&mut v);
+        let s: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(s.visual, SceneId::Scope);
+        assert_eq!(s.scenes.ascii.cell, 24.0);
+        assert_eq!(s.scenes.ascii.density, SceneSettings::default().ascii.density);
+        assert_eq!(s.scenes.scope.gain, 1.5);
+        assert_eq!(s.intensity, 1.2);
+    }
+
+    #[test]
+    fn round_trips() {
+        let mut s = Settings::default();
+        s.scenes.scope.beam = 7.0;
+        let mut v = serde_json::to_value(&s).unwrap();
+        migrate(&mut v);
+        let back: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(back.scenes.scope.beam, 7.0);
     }
 }
