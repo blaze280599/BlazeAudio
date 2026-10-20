@@ -22,7 +22,7 @@ use winit::event::{ElementState, MouseButton, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::platform::windows::WindowAttributesExtWindows;
-use winit::window::{Fullscreen, Icon, Window, WindowId, WindowLevel};
+use winit::window::{Fullscreen, Icon, Window, WindowId};
 
 use audio::{AudioEngine, AudioParams};
 use gpu::Gpu;
@@ -40,10 +40,7 @@ pub fn make_instance() -> wgpu::Instance {
         backend_options: wgpu::BackendOptions {
             dx12: wgpu::Dx12BackendOptions {
                 shader_compiler: wgpu::Dx12Compiler::Fxc,
-                // A DirectComposition visual swapchain supports premultiplied alpha, which is
-                // what makes the transparent desktop overlay possible.
-                presentation_system: wgpu::wgt::Dx12SwapchainKind::DxgiFromVisual,
-                latency_waitable_object: Default::default(),
+                ..Default::default()
             },
             ..Default::default()
         },
@@ -71,7 +68,7 @@ fn fatal(msg: &str) {
 const WINDOW_CLASS: &str = "BlazeAudio";
 
 /// True when another BlazeAudio is already running; that one is brought to the front. Two
-/// copies would fight over the global hotkeys and the settings file.
+/// copies would fight over the settings file.
 fn already_running() -> bool {
     use windows::core::{w, HSTRING};
     use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
@@ -156,13 +153,11 @@ struct App {
     /// Seconds the current scene has been on screen with music playing (for the scene timer).
     scene_clock: f32,
 
-    hotkeys: sys::GlobalHotkeys,
     stats: sys::ProcStats,
     trim_at: Option<Instant>,
     last_mouse_move: Instant,
     cursor_hidden: bool,
     last_click: Instant,
-    hittest: Option<bool>,
     ignore_audio: bool,
     /// Scene area in physical pixels (x, y, w, h), i.e. the window minus docked panels.
     scene_px: [f32; 4],
@@ -203,13 +198,11 @@ impl App {
             volume_flash: 0.0,
             seek_flash: 0.0,
             scene_clock: 0.0,
-            hotkeys: sys::GlobalHotkeys::new(),
             stats: sys::ProcStats::new(),
             trim_at: Some(now + Duration::from_secs(4)),
             last_mouse_move: now,
             cursor_hidden: false,
             last_click: now - Duration::from_secs(5),
-            hittest: None,
             ignore_audio: std::env::var_os("BLAZE_IGNORE_AUDIO").is_some(),
             scene_px: [0.0, 0.0, f32::MAX, f32::MAX],
             cursor: PhysicalPosition::new(0.0, 0.0),
@@ -224,23 +217,11 @@ impl App {
             self.trim_at = Some(Instant::now() + Duration::from_secs(2));
         }
         self.show_sidebar = v;
-        self.update_hittest();
         if v {
             if let Some(g) = &self.gfx {
                 g.window.focus_window();
                 g.window.set_cursor_visible(true);
                 self.cursor_hidden = false;
-            }
-        }
-    }
-
-    fn update_hittest(&mut self) {
-        if let Some(g) = &self.gfx {
-            let interactive = self.mode != WindowMode::Overlay || self.show_sidebar || !self.settings.overlay_click_through;
-            if self.hittest != Some(interactive) {
-                self.hittest = Some(interactive);
-                let _ = g.window.set_cursor_hittest(interactive);
-                sys::fix_layered(&g.window);
             }
         }
     }
@@ -256,36 +237,20 @@ impl App {
         match mode {
             WindowMode::Windowed => {
                 w.set_fullscreen(None);
-                w.set_window_level(WindowLevel::Normal);
-                w.set_decorations(true);
                 if let Some((pos, size)) = self.windowed_rect {
                     w.set_outer_position(pos);
                     let _ = w.request_inner_size(size);
                 }
             }
-            WindowMode::Fullscreen => {
-                w.set_window_level(WindowLevel::Normal);
-                w.set_decorations(true);
-                w.set_fullscreen(Some(Fullscreen::Borderless(None)));
-            }
-            WindowMode::Overlay => {
-                w.set_fullscreen(None);
-                w.set_decorations(false);
-                if let Some(m) = w.current_monitor() {
-                    w.set_outer_position(m.position());
-                    let _ = w.request_inner_size(m.size());
-                }
-                w.set_window_level(WindowLevel::AlwaysOnTop);
-            }
+            WindowMode::Fullscreen => w.set_fullscreen(Some(Fullscreen::Borderless(None))),
         }
         self.mode = mode;
-        // The sidebar is part of the windowed app; fullscreen and overlay are for the visuals.
+        // The sidebar is part of the windowed app; fullscreen is for the visuals.
         self.set_sidebar_visible(mode == WindowMode::Windowed);
         #[cfg(debug_assertions)]
         eprintln!("[win] mode={mode:?} size={:?} pos={:?}", w.inner_size(), w.outer_position());
         w.set_cursor_visible(true);
         self.cursor_hidden = false;
-        self.update_hittest();
         self.trim_at = Some(Instant::now() + Duration::from_secs(3));
     }
 
@@ -325,8 +290,7 @@ impl App {
 
     fn handle_key(&mut self, code: KeyCode) {
         let alt = self.modifiers.alt_key();
-        // Single-key shortcuts only. Ctrl+Alt+O / S are the global hotkeys, polled separately;
-        // letting them through here too would toggle twice and cancel out.
+        // Single-key shortcuts only (plus Alt+Enter), so Ctrl and Alt combos stay free.
         if self.modifiers.control_key() || (alt && code != KeyCode::Enter) {
             return;
         }
@@ -334,7 +298,6 @@ impl App {
             KeyCode::F1 | KeyCode::Tab => self.set_sidebar_visible(!self.show_sidebar),
             KeyCode::F11 | KeyCode::KeyF => self.toggle_mode(WindowMode::Fullscreen),
             KeyCode::Enter if alt => self.toggle_mode(WindowMode::Fullscreen),
-            KeyCode::KeyO => self.toggle_mode(WindowMode::Overlay),
             KeyCode::Digit1
             | KeyCode::Digit2
             | KeyCode::Digit3
@@ -399,14 +362,6 @@ impl App {
         }
     }
 
-    fn poll_global_hotkeys(&mut self) {
-        match self.hotkeys.poll() {
-            Some(sys::GlobalKey::ToggleOverlay) => self.toggle_mode(WindowMode::Overlay),
-            Some(sys::GlobalKey::ToggleSettings) => self.set_sidebar_visible(!self.show_sidebar),
-            None => {}
-        }
-    }
-
     fn sync_media(&mut self) {
         let (tv, av) = self.media.versions();
         if tv != self.track_ver || av != self.art_ver {
@@ -455,7 +410,6 @@ impl App {
         let time = now.duration_since(self.start).as_secs_f32();
 
         self.gfx = Some(g);
-        self.poll_global_hotkeys();
         self.sync_media();
         g = self.gfx.take().unwrap();
 
@@ -473,8 +427,7 @@ impl App {
         let toast_alpha = (self.toast_t / 0.6).min(1.0).min((6.0 - self.toast_t) / 0.4).clamp(0.0, 1.0);
         // Resting on the volume bar or timeline keeps the controls up.
         let still = if self.ui.controls_hot { 0.0 } else { self.last_mouse_move.elapsed().as_secs_f32() };
-        let pointer_ok = self.mode != WindowMode::Overlay || self.show_sidebar;
-        let controls_alpha = if pointer_ok { (1.0 - (still - 2.0) / 0.5).clamp(0.0, 1.0) } else { 0.0 };
+        let controls_alpha = (1.0 - (still - 2.0) / 0.5).clamp(0.0, 1.0);
         let volume_alpha = if self.settings.show_volume { controls_alpha.max((self.volume_flash / 0.4).min(1.0)) } else { 0.0 };
         let has_timeline = self.settings.show_timeline && !self.track.title.is_empty() && self.track.playback.duration > 0.0;
         let timeline_alpha = if has_timeline { controls_alpha.max((self.seek_flash / 0.4).min(1.0)) } else { 0.0 };
@@ -509,7 +462,6 @@ impl App {
                         idle: self.idle,
                         device: &device_name,
                         adapter: &g.gpu.adapter_name,
-                        transparent_ok: g.gpu.transparent_ok,
                         show_sidebar: self.show_sidebar,
                         toast_alpha,
                         controls_alpha,
@@ -541,8 +493,7 @@ impl App {
             self.vis.scene_time = 0.0;
             self.scene_clock = 0.0;
         }
-        let overlay = self.mode == WindowMode::Overlay && g.gpu.transparent_ok;
-        let globals = self.vis.globals(&self.settings, g.gpu.scene_size(), time, overlay);
+        let globals = self.vis.globals(&self.settings, g.gpu.scene_size(), time);
         g.gpu.upload(&globals, &self.vis, &self.settings.scenes);
 
         let surface_tex = match g.gpu.surface.as_ref().unwrap().get_current_texture() {
@@ -568,7 +519,7 @@ impl App {
             ..Default::default()
         });
         let mut enc = g.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
-        g.gpu.encode(&mut enc, &view, overlay);
+        g.gpu.encode(&mut enc, &view);
 
         if let Some(out) = egui_out {
             g.egui_state.handle_platform_output(&g.window, out.platform_output);
@@ -605,7 +556,6 @@ impl App {
                 ui::UiAction::Media(cmd) => self.media.send(cmd),
             }
         }
-        self.update_hittest();
 
         self.idle = !drawer_open && controls_alpha <= 0.0 && volume_alpha <= 0.0 && timeline_alpha <= 0.0 && self.toast_t <= 0.0 && self.vis.silent_for > 3.0;
         self.stats.update();
@@ -619,7 +569,8 @@ impl App {
     fn schedule(&mut self, el: &ActiveEventLoop) {
         let Some(g) = &self.gfx else { return };
         if self.minimized || self.occluded {
-            el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(200)));
+            // Nothing to draw; restoring the window (Resized / Occluded) requests the next frame.
+            el.set_control_flow(ControlFlow::Wait);
         } else if self.idle {
             let period = Duration::from_secs_f32(1.0 / self.settings.idle_fps.max(1) as f32);
             self.next_frame = self.last_frame + period;
@@ -642,8 +593,7 @@ impl ApplicationHandler for App {
             .with_min_inner_size(LogicalSize::new(320.0, 200.0))
             .with_window_icon(app_icon())
             .with_taskbar_icon(app_icon())
-            .with_class_name(WINDOW_CLASS)
-            .with_no_redirection_bitmap(true);
+            .with_class_name(WINDOW_CLASS);
         // Reopen where it was, as long as its title bar is still on a connected monitor.
         if let Some(gm) = self.settings.window {
             let (tx, ty) = (gm.x + gm.w as i32 / 2, gm.y + 16);
@@ -706,7 +656,6 @@ impl ApplicationHandler for App {
     fn new_events(&mut self, el: &ActiveEventLoop, cause: StartCause) {
         if let StartCause::ResumeTimeReached { .. } = cause {
             if self.minimized || self.occluded {
-                self.poll_global_hotkeys();
                 self.schedule(el);
             } else if let Some(g) = &self.gfx {
                 g.window.request_redraw();

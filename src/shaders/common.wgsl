@@ -4,10 +4,10 @@
 struct Globals {
   res: vec2f, inv_res: vec2f,
   time: f32, treble: f32, hat: f32, kick: f32,
-  beat_count: f32, flow: f32, intensity: f32, overlay: f32,
-  overlay_opacity: f32, bloom_threshold: f32, bloom_knee: f32, bloom_strength: f32,
+  beat_count: f32, flow: f32, intensity: f32, _pad0: f32,
+  _pad1: f32, bloom_threshold: f32, bloom_knee: f32, bloom_strength: f32,
   exposure: f32, chromatic: f32, grain: f32, vignette: f32,
-  energy: f32, beat_age: f32, scene_time: f32, _pad0: f32,
+  energy: f32, beat_age: f32, scene_time: f32, _pad2: f32,
   pal: array<vec4f, 4>,
 };
 

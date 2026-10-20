@@ -16,7 +16,6 @@ pub(super) enum Icon {
     HideSidebar,
     Reset,
     Fullscreen,
-    Overlay,
     Speaker,
     Muted,
     Play,
@@ -133,10 +132,6 @@ pub(super) fn paint_icon(p: &egui::Painter, icon: Icon, c: Pos2, col: Color32) {
                     p.add(egui::Shape::line(pts, s));
                 }
             }
-        }
-        Icon::Overlay => {
-            p.rect_stroke(Rect::from_center_size(c + v(-2.0, -2.0), v(10.0, 8.0)), CornerRadius::same(1), s, StrokeKind::Middle);
-            p.rect_stroke(Rect::from_center_size(c + v(2.5, 2.5), v(10.0, 8.0)), CornerRadius::same(1), s, StrokeKind::Middle);
         }
         Icon::Play => {
             // Nudged right so the triangle looks centred.

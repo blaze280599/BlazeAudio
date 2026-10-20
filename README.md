@@ -1,6 +1,6 @@
 # BlazeAudio
 
-An HDR music visualizer for Windows. It listens to whatever your PC is playing (Spotify, a browser, a game, anything) and turns it into audio-reactive visuals. It picks up the song title and album art, takes its colours from the cover, and runs in a window, fullscreen, or as a transparent overlay on top of your desktop.
+An HDR music visualizer for Windows. It listens to whatever your PC is playing (Spotify, a browser, a game, anything) and turns it into audio-reactive visuals. It picks up the song title and album art, takes its colours from the cover, and runs in a window or fullscreen.
 
 Everything ships as one `blazeaudio.exe`. There's nothing to install and no account to sign into, and it uses no network.
 
@@ -34,7 +34,7 @@ Switch with the number keys, `S` for the next scene, or the buttons in **Visuals
 - **Now playing**: a card with the cover and title appears on each track change (`T` shows it again). The sidebar has play/pause, skip and a progress bar.
 - **Seeking**: hover the visuals for a wide timeline you can drag, click or scroll. `Left` / `Right` jump 5 s.
 - **Volume**: hovering also shows a volume bar for the Windows output volume. `Up` / `Down` change it and `M` mutes.
-- **Window modes**: windowed, borderless fullscreen (`F11`), or **overlay** (`O`). Overlay covers the monitor with a transparent background, so only the glowing parts show over your apps, and clicks pass through. Handy on a second monitor while you game or work.
+- **Window modes**: windowed with the sidebar, or borderless fullscreen (`F11`) for just the visuals.
 - **Look controls**: bloom, exposure, chromatic aberration, film grain, vignette and per-scene options, each resettable on its own. **Randomize** rolls a new look, **Undo** steps back and **Reset** restores the defaults.
 - **Lightweight**: about 0.1% CPU when idle and under 1% while playing, with around 20 MB of memory. It slows down when nothing is playing and stops rendering when hidden.
 - **Remembers you**: settings, window position and size persist between runs. Only one copy runs at a time.
@@ -45,7 +45,6 @@ Switch with the number keys, `S` for the next scene, or the buttons in **Visuals
 |-----|--------|
 | `F1` / `Tab` | Show / hide the sidebar |
 | `F11` / `F` / `Alt+Enter` / double-click | Fullscreen |
-| `O` | Overlay mode |
 | `1` – `4` | Faulty Terminal / Gradient ASCII / Phosphor Scope / Crystalized Ball |
 | `S` | Next scene |
 | `Space` | Play / pause |
@@ -55,11 +54,7 @@ Switch with the number keys, `S` for the next scene, or the buttons in **Visuals
 | `Up` / `Down` | Volume up / down |
 | `M` | Mute / unmute |
 | `F3` | Performance stats |
-| `Esc` | Close the drawer, then the sidebar, then leave fullscreen or overlay |
-| `Ctrl+Alt+O` | Toggle overlay (works from any app) |
-| `Ctrl+Alt+S` | Toggle the sidebar (works from any app, and makes the overlay clickable) |
-
-The two `Ctrl+Alt` shortcuts work even when BlazeAudio isn't focused, which you need in overlay mode, where the window can't take normal key presses.
+| `Esc` | Close the drawer, then the sidebar, then leave fullscreen |
 
 ## Settings
 
@@ -68,7 +63,7 @@ The sidebar has five sections:
 - **Visuals**: scene, auto-switch, the scene's own options, and the shared look effects
 - **Audio**: sensitivity, how fast bars rise and fall, beat sensitivity
 - **Palette**: album colours on or off, and the fallback palette
-- **General**: window and startup mode, overlay opacity and click-through, theme (Dark, OLED black, Light), on-scene extras
+- **General**: window and startup mode, theme (Dark, OLED black, Light), on-scene extras
 - **Hotkeys**: the full key list
 
 A changed setting shows a reset button next to it; double-clicking its label also resets it. Settings are saved to `%APPDATA%\BlazeAudio\settings.json`.

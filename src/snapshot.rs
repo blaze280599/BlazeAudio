@@ -163,7 +163,7 @@ pub fn run(dir: &Path) {
         let dt = 1.0 / fps;
         time += dt;
         vis.update(&f, dt, Instant::now());
-        let g = vis.globals(settings, gpu.scene_size(), time, false);
+        let g = vis.globals(settings, gpu.scene_size(), time);
         gpu.upload(&g, vis, &settings.scenes);
         if capture {
             Some(gpu.capture())

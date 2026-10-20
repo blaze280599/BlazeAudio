@@ -20,7 +20,7 @@ use egui::{Margin, Rect, Stroke};
 
 use icons::Icon;
 pub use theme::Tokens;
-use theme::{to_c32, tokens, with_alpha};
+use theme::{to_c32, tokens};
 
 use crate::media::{MediaCmd, TrackInfo, ART_SIZE};
 use crate::palette::Palette;
@@ -45,7 +45,7 @@ pub enum Section {
     Visuals,
     Audio,
     Palette,
-    /// Window modes, overlay, theme and the on-scene extras.
+    /// Window modes, theme and the on-scene extras.
     General,
     Hotkeys,
 }
@@ -86,7 +86,6 @@ pub struct UiCtx<'a> {
     pub idle: bool,
     pub device: &'a str,
     pub adapter: &'a str,
-    pub transparent_ok: bool,
     pub show_sidebar: bool,
     pub toast_alpha: f32,
     /// Opacity of the on-scene window buttons (fades after the mouse rests).
@@ -131,8 +130,6 @@ impl UiState {
         let mut actions = Vec::new();
         let accent = to_c32(c.palette[0], 255);
 
-        // Panels are opaque, except over the desktop in overlay mode.
-        let alpha = if c.mode == WindowMode::Overlay { 236 } else { 255 };
         let mut scene_rect = ctx.content_rect();
         if c.show_sidebar {
             let w = if c.settings.sidebar_expanded { SIDEBAR_W } else { RAIL_W };
@@ -141,7 +138,7 @@ impl UiState {
                 .exact_width(w)
                 .frame(
                     egui::Frame::new()
-                        .fill(with_alpha(t.sidebar, alpha))
+                        .fill(t.sidebar)
                         .stroke(Stroke::new(1.0_f32, t.border))
                         .inner_margin(Margin::symmetric(8, 10)),
                 )
@@ -153,7 +150,7 @@ impl UiState {
                     .exact_width(DRAWER_W)
                     .frame(
                         egui::Frame::new()
-                            .fill(with_alpha(t.drawer, alpha))
+                            .fill(t.drawer)
                             .stroke(Stroke::new(1.0_f32, t.border))
                             .inner_margin(Margin::same(16)),
                     )

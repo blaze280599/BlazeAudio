@@ -159,7 +159,7 @@ impl UiState {
     }
 }
 
-/// Fullscreen / overlay buttons over the top-right corner of the scene.
+/// Fullscreen button over the top-right corner of the scene.
 pub(super) fn window_buttons(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens, actions: &mut Vec<UiAction>) {
     let frame = egui::Frame::new()
         .fill(t.float)
@@ -174,11 +174,6 @@ pub(super) fn window_buttons(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &To
             ui.multiply_opacity(c.controls_alpha);
             frame.show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let ov = c.mode == WindowMode::Overlay;
-                    let tip = if ov { "Leave overlay (O)" } else { "Overlay mode (O)" };
-                    if icon_button(ui, t, Icon::Overlay, 26.0).on_hover_text(tip).clicked() {
-                        actions.push(UiAction::SetMode(if ov { WindowMode::Windowed } else { WindowMode::Overlay }));
-                    }
                     let fs = c.mode == WindowMode::Fullscreen;
                     let tip = if fs { "Exit fullscreen (F11)" } else { "Fullscreen (F11)" };
                     if icon_button(ui, t, Icon::Fullscreen, 26.0).on_hover_text(tip).clicked() {

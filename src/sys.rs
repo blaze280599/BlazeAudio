@@ -1,46 +1,10 @@
-//! Small Win32 helpers: global hotkey polling, process CPU/RAM stats, working-set trim.
+//! Small Win32 helpers: process CPU/RAM stats, working-set trim.
 
 use std::time::Instant;
 
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::ProcessStatus::{K32EmptyWorkingSet, K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
 use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-
-const VK_CONTROL: i32 = 0x11;
-const VK_MENU: i32 = 0x12;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum GlobalKey {
-    ToggleOverlay,
-    ToggleSettings,
-}
-
-/// Polls Ctrl+Alt+{O,S} regardless of focus — needed because the overlay is click-through.
-pub struct GlobalHotkeys {
-    prev: [bool; 2],
-}
-
-impl GlobalHotkeys {
-    pub fn new() -> Self {
-        Self { prev: [false; 2] }
-    }
-
-    pub fn poll(&mut self) -> Option<GlobalKey> {
-        let down = |vk: i32| unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 };
-        let mods = down(VK_CONTROL) && down(VK_MENU);
-        let keys = [(b'O', GlobalKey::ToggleOverlay), (b'S', GlobalKey::ToggleSettings)];
-        let mut fired = None;
-        for (i, (vk, k)) in keys.iter().enumerate() {
-            let now = mods && down(*vk as i32);
-            if now && !self.prev[i] {
-                fired = Some(*k);
-            }
-            self.prev[i] = now;
-        }
-        fired
-    }
-}
 
 pub struct ProcStats {
     last_wall: Instant,
@@ -104,22 +68,5 @@ impl ProcStats {
 pub fn trim_working_set() {
     unsafe {
         let _ = K32EmptyWorkingSet(GetCurrentProcess());
-    }
-}
-
-/// winit makes a window click-through by adding WS_EX_LAYERED | WS_EX_TRANSPARENT. A layered
-/// window is never shown until SetLayeredWindowAttributes is called, so give it full opacity
-/// (per-pixel transparency still comes from the DirectComposition swapchain).
-pub fn fix_layered(window: &winit::window::Window) {
-    use windows::Win32::Foundation::{COLORREF, HWND};
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetLayeredWindowAttributes, GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED};
-    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let Ok(handle) = window.window_handle() else { return };
-    let RawWindowHandle::Win32(h) = handle.as_raw() else { return };
-    let hwnd = HWND(h.hwnd.get() as *mut core::ffi::c_void);
-    unsafe {
-        if GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_LAYERED.0 != 0 {
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
-        }
     }
 }

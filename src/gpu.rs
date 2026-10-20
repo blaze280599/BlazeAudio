@@ -30,8 +30,8 @@ pub struct Globals {
     pub beat_count: f32,
     pub flow: f32,
     pub intensity: f32,
-    pub overlay: f32,
-    pub overlay_opacity: f32,
+    pub _pad0: f32,
+    pub _pad1: f32,
     pub bloom_threshold: f32,
     pub bloom_knee: f32,
     pub bloom_strength: f32,
@@ -42,7 +42,7 @@ pub struct Globals {
     pub energy: f32,
     pub beat_age: f32,
     pub scene_time: f32,
-    pub _pad: f32,
+    pub _pad2: f32,
     pub pal: [[f32; 4]; 4],
 }
 
@@ -192,7 +192,6 @@ pub struct Gpu {
     pub config: wgpu::SurfaceConfiguration,
     /// Format render passes write to the swapchain with (sRGB view).
     pub view_format: wgpu::TextureFormat,
-    pub transparent_ok: bool,
     pub adapter_name: String,
     pub render_scale: f32,
 
@@ -244,7 +243,7 @@ impl Gpu {
             .map_err(|e| format!("Failed to create device: {e}"))?;
 
         // ---- Surface ----
-        let (config, view_format, transparent_ok) = match &surface {
+        let (config, view_format) = match &surface {
             Some(s) => {
                 let caps = s.get_capabilities(&adapter);
                 let base = caps
@@ -255,9 +254,8 @@ impl Gpu {
                     .or_else(|| caps.formats.iter().copied().find(|f| !f.is_srgb()))
                     .unwrap_or(caps.formats[0]);
                 let srgb = base.add_srgb_suffix();
-                let transparent_ok = caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied);
-                let alpha_mode = if transparent_ok {
-                    wgpu::CompositeAlphaMode::PreMultiplied
+                let alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+                    wgpu::CompositeAlphaMode::Opaque
                 } else {
                     caps.alpha_modes[0]
                 };
@@ -272,7 +270,7 @@ impl Gpu {
                     view_formats: if srgb != base { vec![srgb] } else { vec![] },
                 };
                 s.configure(&device, &config);
-                (config, srgb, transparent_ok)
+                (config, srgb)
             }
             None => {
                 let fmt = wgpu::TextureFormat::Rgba8Unorm;
@@ -288,7 +286,6 @@ impl Gpu {
                         view_formats: vec![],
                     },
                     wgpu::TextureFormat::Rgba8UnormSrgb,
-                    false,
                 )
             }
         };
@@ -438,7 +435,6 @@ impl Gpu {
             surface,
             config,
             view_format,
-            transparent_ok,
             adapter_name,
             render_scale,
             globals_buf,
@@ -514,7 +510,7 @@ impl Gpu {
     }
 
     /// Encode a full frame: scene -> bloom -> tonemap into `out`.
-    pub fn encode(&mut self, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView, overlay: bool) {
+    pub fn encode(&mut self, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView) {
         let fresh = self.scene != self.last_scene;
         self.last_scene = self.scene;
         let t = &self.targets;
@@ -530,16 +526,14 @@ impl Gpu {
             fullscreen_pass(enc, &t.bloom[i - 1].view, wgpu::LoadOp::Load, &self.pipes.up, &self.g0, Some(&t.bg_up[i]));
         }
 
-        // Tonemap into the scene viewport. Outside it (behind docked panels) stays transparent
-        // in overlay mode and black otherwise, so a translucent panel never shows the desktop.
-        let clear = if overlay { wgpu::Color::TRANSPARENT } else { wgpu::Color::BLACK };
+        // Tonemap into the scene viewport; outside it (behind docked panels) is cleared to black.
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("tonemap"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: out,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -615,7 +609,7 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let mut enc = self.device.create_command_encoder(&Default::default());
-        self.encode(&mut enc, &view, false);
+        self.encode(&mut enc, &view);
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             wgpu::TexelCopyBufferInfo {
@@ -643,7 +637,7 @@ impl Gpu {
     pub fn step_offscreen(&mut self) {
         let mut enc = self.device.create_command_encoder(&Default::default());
         let tmp = make_tex(&self.device, 4, 4, self.view_format, "warm");
-        self.encode(&mut enc, &tmp.view, false);
+        self.encode(&mut enc, &tmp.view);
         self.queue.submit([enc.finish()]);
     }
 }

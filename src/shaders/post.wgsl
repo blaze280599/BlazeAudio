@@ -148,13 +148,5 @@ fn fs_tonemap(in: VsOut) -> @location(0) vec4f {
   let n2 = hash21(in.pos.yx * 1.37 + fract(G.time * 3.17) * vec2f(53.0, 151.0)) - 0.5;
   sr += vec3f(n * G.grain * 0.045 * (0.4 + 0.6 * (1.0 - luma(sr))) + (n2 + n) * (0.5 / 255.0));
   m = to_linear(clamp(sr, vec3f(0.0), vec3f(1.0)));
-
-  var alpha = 1.0;
-  if (G.overlay > 0.5) {
-    // Premultiplied output: dark pixels become transparent, bright ones glow over the desktop.
-    let mx = max(max(m.r, m.g), m.b);
-    alpha = smoothstep(0.015, 0.35, mx) * G.overlay_opacity;
-    m = max(m - vec3f(0.006), vec3f(0.0)) * G.overlay_opacity;
-  }
-  return vec4f(m, alpha);
+  return vec4f(m, 1.0);
 }

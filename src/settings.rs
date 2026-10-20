@@ -5,9 +5,10 @@ use crate::scenes::{SceneId, SceneSettings};
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum WindowMode {
+    /// Older builds also had an overlay mode; a file that starts in it opens windowed.
+    #[serde(alias = "Overlay")]
     Windowed,
     Fullscreen,
-    Overlay,
 }
 
 /// When to move on to the next scene by itself.
@@ -74,8 +75,6 @@ pub struct Settings {
     pub start_mode: WindowMode,
     pub sidebar_expanded: bool,
     pub theme: UiTheme,
-    pub overlay_opacity: f32,
-    pub overlay_click_through: bool,
     /// Where the window was when the app last closed.
     pub window: Option<WindowGeom>,
 }
@@ -109,8 +108,6 @@ impl Default for Settings {
             start_mode: WindowMode::Windowed,
             sidebar_expanded: true,
             theme: UiTheme::Dark,
-            overlay_opacity: 0.9,
-            overlay_click_through: true,
             window: None,
         }
     }
@@ -231,6 +228,16 @@ mod tests {
         assert_eq!(s.scenes.ascii.cell, 24.0);
         assert_eq!(s.scenes.ascii.density, SceneSettings::default().ascii.density);
         assert_eq!(s.scenes.scope.gain, 1.5);
+        assert_eq!(s.intensity, 1.2);
+    }
+
+    #[test]
+    fn overlay_start_mode_opens_windowed() {
+        let old = r#"{"start_mode":"Overlay","overlay_opacity":0.5,"overlay_click_through":false,"intensity":1.2}"#;
+        let mut v: serde_json::Value = serde_json::from_str(old).unwrap();
+        migrate(&mut v);
+        let s: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(s.start_mode, WindowMode::Windowed);
         assert_eq!(s.intensity, 1.2);
     }
 

@@ -13,7 +13,7 @@ BlazeAudio is a single-binary Windows music visualizer written in Rust.
 - It **captures whatever the PC is playing** through WASAPI loopback (no driver, no virtual cable).
 - It **reads now-playing info and album art** from the Windows media session API (GSMTC), so Spotify or a browser shows title, artist and cover. Play, pause, skip and seek go back through the same API.
 - It **renders audio-reactive HDR scenes** with wgpu on DirectX 12, followed by bloom, ACES tonemapping and film effects.
-- It has **three window modes**: windowed with a docked egui sidebar, borderless fullscreen, and a transparent click-through overlay above the desktop.
+- It has **two window modes**: windowed with a docked egui sidebar, and borderless fullscreen.
 - It **controls the system output volume** through Core Audio.
 
 The current scenes are **Faulty Terminal** (CRT glyph spectrum), **Gradient ASCII** (a light seen through a glyph grid) **Phosphor Scope** (a vector oscilloscope with afterglow) and **Crystalized Ball** (an electric glass sphere full of instanced dust particles). More scenes are planned; the scene framework in `src/scenes/` exists for that reason.
@@ -24,7 +24,7 @@ These are product decisions. Don't change them without the user asking.
 
 | Constraint | Consequence |
 |---|---|
-| Windows only | The `windows` crate, WASAPI, GSMTC, DX12 and DirectComposition are used directly. No cross-platform abstractions or `cfg` gates for other OSes. |
+| Windows only | The `windows` crate, WASAPI, GSMTC and DX12 are used directly. No cross-platform abstractions or `cfg` gates for other OSes. |
 | DX12 only, FXC shader compiler | `make_instance()` in `main.rs` selects `Backends::DX12` and `Dx12Compiler::Fxc`. Shaders must compile under FXC (see Pitfalls §9). |
 | One self-contained `.exe` | Static CRT (`.cargo/config.toml`), no runtime asset files. Shaders, fonts and icons are embedded (`include_str!`, `epaint_default_fonts`, painted icons). Don't add files the exe must load at runtime. |
 | Very low idle cost | About 0.1% CPU idle and 0.6% playing, about 20 MB working set. Don't add per-frame allocations in hot paths, polling threads, or work that runs while silent or hidden. |
@@ -106,12 +106,12 @@ Rules:
 ### 3.2 The frame loop (`App::frame` in `main.rs`)
 
 ```
-poll_global_hotkeys()  sync_media()                      ← track/art changes, palette target, auto-switch on track
+sync_media()                                             ← track/art changes, palette target, auto-switch on track
 vis.update(audio.snapshot(), dt)                         ← smoothing, kick/hat envelopes, flow clock, palette crossfade
 need_ui? → egui_ctx.run(ui.draw(UiCtx{..}))              ← returns Vec<UiAction> + the scene rect
 gpu.set_viewport(scene rect) / set_render_scale
 scene timer / auto-switch → settings.visual → gpu.scene
-globals = vis.globals(settings, gpu.scene_size(), time, overlay)
+globals = vis.globals(settings, gpu.scene_size(), time)
 gpu.upload(&globals, &vis, &settings.scenes)              ← Globals + audio buffer + active scene's Params
 surface.get_current_texture()                            ← Outdated/Lost → resize and skip; OOM → exit
 gpu.encode(): scene → bloom (6 levels) → tonemap into viewport
@@ -120,31 +120,29 @@ submit, present
 drawer open → audio.set_params(); drawer just closed → settings.save()
 apply UiActions (SetMode, HideSidebar, Media)
 idle = nothing on screen needs updates && silent > 3 s
-schedule(): ControlFlow::Wait + request_redraw | WaitUntil(idle period) | WaitUntil(200 ms) when minimized/occluded
+schedule(): ControlFlow::Wait + request_redraw | WaitUntil(idle period) | Wait when minimized/occluded
 ```
 
 Key facts:
 
 - **egui only runs when something is visible**: the sidebar, toast, stats, on-scene controls, the volume bar or the timeline. The `need_ui` expression lists them. Anything new that draws over the scene must be added there and to `idle`, or it will freeze or vanish.
 - **The UI runs before rendering** because the docked sidebar decides the scene viewport. Scene targets are sized to the viewport times `render_scale`. When that size changes, `Gpu::rebuild_targets` rebuilds the bloom chain and calls `Scene::resize` on every scene.
-- **Frame pacing**: when active, vsync (`AutoVsync`) paces frames through `request_redraw`. When idle, `WaitUntil(last_frame + 1/idle_fps)`. When minimized or occluded, the app polls every 200 ms, only for global hotkeys.
+- **Frame pacing**: when active, vsync (`AutoVsync`) paces frames through `request_redraw`. When idle, `WaitUntil(last_frame + 1/idle_fps)`. When minimized or occluded, it waits with no timer; `Resized` / `Occluded(false)` request the next frame.
 - **Settings save points**: the drawer closing, the sidebar being hidden, Esc closing the drawer, `CloseRequested` (which also calls `remember_window()`), and `exiting`. Saving is atomic: write `.json.tmp`, then rename.
 - `trim_at` schedules `sys::trim_working_set()` a few seconds after startup and mode changes. It's a cosmetic memory-footprint measure.
 
-### 3.3 Window modes and input (`main.rs`, `sys.rs`)
+### 3.3 Window modes and input (`main.rs`)
 
-- **Windowed** shows the sidebar and decorations. **Fullscreen** is `Fullscreen::Borderless`, hides the sidebar, and hides the cursor after 2.5 s without movement. **Overlay** has no decorations, is sized to the monitor, is always on top, and uses a transparent swapchain.
-- Overlay transparency needs `Dx12SwapchainKind::DxgiFromVisual` (DirectComposition) and `CompositeAlphaMode::PreMultiplied`. `gpu.transparent_ok` reports whether the surface supports it. The tonemap pass outputs premultiplied alpha derived from brightness when `G.overlay > 0.5`.
-- Click-through is `window.set_cursor_hittest(false)`. winit implements it with `WS_EX_LAYERED | WS_EX_TRANSPARENT`, and a layered window stays invisible until `SetLayeredWindowAttributes` is called. That's why `sys::fix_layered` runs after every hittest change. Don't remove it.
-- The overlay is interactive only when the sidebar is open or click-through is off (`update_hittest`).
-- **Global hotkeys** (`sys::GlobalHotkeys`) poll `GetAsyncKeyState` for Ctrl+Alt+O and Ctrl+Alt+S each frame (and every 200 ms while hidden), because a click-through window gets no keyboard input. `handle_key` ignores Ctrl and Alt combos (except Alt+Enter) so these don't fire twice.
+- **Windowed** shows the sidebar and decorations. **Fullscreen** is `Fullscreen::Borderless`, hides the sidebar, and hides the cursor after 2.5 s without movement.
+- The swapchain is an ordinary opaque HWND flip-model swapchain (wgpu's DX12 default).
+- `handle_key` ignores Ctrl and Alt combos (except Alt+Enter).
 - Keys: `handle_key` gets presses that aren't repeats, except the arrow keys, which repeat for volume and seek. It skips keys when egui wants the keyboard (a text field is focused) or consumed the event (except F1).
 - Double-click on the scene, outside any UI area, toggles fullscreen (`MouseInput` plus `scene_px`).
 - Window geometry: `remember_window()` stores the restored windowed rect and the maximized flag in `settings.window`. On startup it's reused only if the title bar lands on a connected monitor.
 
 ### 3.4 Rendering (`gpu.rs`, `scenes/`, `shaders/`)
 
-Pipeline per frame: **scene → Rgba16Float scene target → bloom downsample ×6 (13-tap, Karis on the first level, soft-knee threshold) → tent upsample (additive) → tonemap (fitted ACES, chromatic aberration on kicks, vignette, grain and dither in display space, overlay alpha) → swapchain viewport → egui.**
+Pipeline per frame: **scene → Rgba16Float scene target → bloom downsample ×6 (13-tap, Karis on the first level, soft-knee threshold) → tent upsample (additive) → tonemap (fitted ACES, chromatic aberration on kicks, vignette, grain and dither in display space) → swapchain viewport → egui.**
 
 Ownership:
 
@@ -155,7 +153,7 @@ Bindings (identical layout for every pipeline):
 
 | Slot | WGSL | Contents | Defined in |
 |---|---|---|---|
-| g0 b0 | `G: Globals` (uniform) | res, inv_res, time, treble, hat, kick, beat_count, flow, intensity, overlay, overlay_opacity, bloom params, exposure, chromatic, grain, vignette, energy, beat_age, scene_time, pal[4] | `gpu::Globals` ⇄ `common.wgsl`, filled by `VisState::globals` |
+| g0 b0 | `G: Globals` (uniform) | res, inv_res, time, treble, hat, kick, beat_count, flow, intensity, bloom params, exposure, chromatic, grain, vignette, energy, beat_age, scene_time, pal[4] | `gpu::Globals` ⇄ `common.wgsl`, filled by `VisState::globals` |
 | g0 b1 | `A: AudioData` (storage, read) | `bands[64]`, `wave[2048]` | `VisState::audio_buffer` ⇄ `common.wgsl` |
 | g0 b2 | `samp_clamp` | Linear, clamp, linear mips | `gpu.rs` |
 | g0 b3 | `P: Params` (uniform, 256 bytes) | The **active** scene's own values | each scene's `.rs` struct ⇄ its `.wgsl` |
@@ -214,7 +212,7 @@ UI conventions:
 - An `egui::Area` remembers its size from earlier frames. If its content width changes (a new track title, say), give it an id that changes with the content. The toast does this.
 - The drawer is a fixed 300 pt wide. Controls must fit: `knob` sizes its slider to the row width minus a 72 pt value box. Keep labels short.
 - On-scene controls set `self.controls_hot` while hovered or dragged, so they don't fade out from under the pointer.
-- Panels are opaque except in overlay mode (alpha 236).
+- Panels are opaque.
 - Child modules of `ui` can read `UiState`'s private fields. Functions shared between siblings are `pub(super)`. Only `widgets::{knob, choice, num, PCT, Fmt}` and `Tokens` are public outside `ui`, because scenes use them.
 
 ### 3.8 Settings (`settings.rs`)
@@ -399,7 +397,6 @@ From those, everything else updates automatically: sidebar buttons, number keys 
 1. Add an arm to `App::handle_key` in `main.rs`. Keys arrive only without Ctrl or Alt.
 2. Add a row to the `rows` array in `hotkeys()` (`ui/drawer.rs`), and bump the array length.
 3. Add the key to the Controls table in `README.md`.
-4. If the key should work while the app isn't focused (mainly for overlay mode), add it to `sys::GlobalHotkeys` (`GetAsyncKeyState` polling, Ctrl+Alt modifiers) and handle it in `App::poll_global_hotkeys`.
 
 ### 5.4 Add a settings section
 
@@ -466,14 +463,14 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 |---|---|
 | Change what a scene looks like | `src/shaders/<scene>.wgsl` |
 | Change a scene's controls or defaults | `src/scenes/<scene>.rs` (`Settings`, `SceneConfig::ui`) |
-| Change bloom, tonemap, grain, vignette or overlay alpha | `src/shaders/post.wgsl`, settings in `Settings`, values in `VisState::globals` |
+| Change bloom, tonemap, grain or vignette | `src/shaders/post.wgsl`, settings in `Settings`, values in `VisState::globals` |
 | Change how music drives the visuals (smoothing, kick envelope, flow clock) | `src/vis.rs` |
 | Change beat detection, bands or tempo | `src/audio.rs` (`Analyzer`) |
 | Change album-palette extraction or presets | `src/palette.rs` |
 | Change now-playing, art fetch or transport | `src/media.rs` |
 | Change volume control | `src/volume.rs` (worker), `ui/overlay.rs` `volume_bar`, `wake.rs` (slider widget) |
 | Change window modes, keys or frame pacing | `src/main.rs` |
-| Change global hotkeys, CPU/RAM stats or click-through | `src/sys.rs` |
+| Change CPU/RAM stats or working-set trimming | `src/sys.rs` |
 | Change the sidebar or drawer | `src/ui/sidebar.rs`, `src/ui/drawer.rs` |
 | Change UI colours or the egui style | `src/ui/theme.rs` |
 | Change the self-test | `src/snapshot.rs` |
@@ -488,7 +485,6 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 - **Name collisions** with `common.wgsl`: a scene shader can't define `G`, `A`, `P` (except its own `Params`), `vs_full`, `VsOut`, `hash11`, `band`, `pal`, `luma`, `crt_curve` and so on.
 - **`SceneId::ALL` order** sets the number keys and the startup default (`ALL[0]`). Reordering changes what users' keys do.
 - **egui `Area` sizing**: an Area keeps its previous size, so content that grows wraps or clips unless the Area's id changes.
-- **Overlay mode**: a new layered or click-through style needs `sys::fix_layered`, or the window turns invisible. The tonemap clears outside the viewport to transparent in overlay mode and black otherwise, so a translucent panel never shows the desktop through it.
 - **Main-thread blocking**: a COM or WinRT call on the main thread (media control, volume) can stall frames for tens of milliseconds. Always go through the worker's channel.
 - **`panic = "abort"`** in release: a panic anywhere ends the process. Prefer `Option` and `let Some(..) else` over `unwrap()` in new code.
 - **Settings compatibility**: renaming a field, enum variant or `SceneId` resets users' saved values unless you migrate (§3.8).

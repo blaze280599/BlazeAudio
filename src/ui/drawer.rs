@@ -89,34 +89,13 @@ impl UiState {
     fn general(&mut self, ui: &mut egui::Ui, c: &mut UiCtx, t: &Tokens, actions: &mut Vec<UiAction>) {
         let s = &mut *c.settings;
         let d = Settings::default();
-        let modes = [(WindowMode::Windowed, "Windowed"), (WindowMode::Fullscreen, "Fullscreen"), (WindowMode::Overlay, "Overlay")];
+        let modes = [(WindowMode::Windowed, "Windowed"), (WindowMode::Fullscreen, "Fullscreen")];
         ui.label(RichText::new("Mode").color(t.dim));
         let mut mode = c.mode;
         if segmented(ui, t, &mut mode, &modes) {
             actions.push(UiAction::SetMode(mode));
         }
         choice(ui, t, "Start in", &mut s.start_mode, d.start_mode, &modes);
-
-        heading(ui, t, "Overlay");
-        let overlay = c.mode == WindowMode::Overlay;
-        if !overlay {
-            ui.label(RichText::new("These apply in overlay mode. Switch to Overlay to change them.").small().color(t.faint));
-        }
-        ui.add_enabled_ui(overlay, |ui| {
-            egui::Frame::new()
-                .fill(t.card)
-                .stroke(Stroke::new(1.0_f32, t.border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(Margin::same(10))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    if !c.transparent_ok {
-                        ui.label(RichText::new("Transparent overlay unsupported on this GPU; overlay will be opaque.").small().color(Color32::from_rgb(230, 150, 70)));
-                    }
-                    knob(ui, t, "Opacity", &mut s.overlay_opacity, d.overlay_opacity, 0.2..=1.0, PCT);
-                    ui.checkbox(&mut s.overlay_click_through, "Click-through");
-                });
-        });
 
         heading(ui, t, "Theme");
         let w = (ui.available_width() - 12.0) / 3.0;
@@ -253,7 +232,7 @@ fn palette(ui: &mut egui::Ui, c: &mut UiCtx, t: &Tokens) {
 fn hotkeys(ui: &mut egui::Ui, t: &Tokens) {
     let digits: Vec<String> = (1..=SceneId::ALL.len().min(9)).map(|i| i.to_string()).collect();
     let digits: Vec<&str> = digits.iter().map(String::as_str).collect();
-    let rows: [(&str, &[&str]); 13] = [
+    let rows: [(&str, &[&str]); 12] = [
         ("Sidebar", &["F1", "Tab"]),
         ("Scene", &digits),
         ("Next scene", &["S"]),
@@ -261,7 +240,6 @@ fn hotkeys(ui: &mut egui::Ui, t: &Tokens) {
         ("Next / previous track", &["N", "P"]),
         ("Seek 5 s", &["Left", "Right"]),
         ("Fullscreen", &["F11", "F", "Alt+Enter"]),
-        ("Overlay mode", &["O"]),
         ("Show now playing", &["T"]),
         ("Volume up / down", &["Up", "Down"]),
         ("Mute", &["M"]),
@@ -272,13 +250,6 @@ fn hotkeys(ui: &mut egui::Ui, t: &Tokens) {
         key_row(ui, t, d, keys);
     }
     ui.label(RichText::new("Double-click the scene to toggle fullscreen.").small().color(t.faint));
-    ui.add_space(10.0);
-    ui.label(RichText::new("Global (work from any app, and in overlay)").small().strong().color(t.dim));
-    ui.add_space(2.0);
-    let global: [(&str, &[&str]); 2] = [("Overlay mode", &["Ctrl+Alt+O"]), ("Sidebar", &["Ctrl+Alt+S"])];
-    for (d, keys) in global {
-        key_row(ui, t, d, keys);
-    }
 }
 
 /// Selectable palette preset: its four colours, then its name.

@@ -133,7 +133,7 @@ impl VisState {
         out
     }
 
-    pub fn globals(&self, s: &Settings, res: (u32, u32), time: f32, overlay: bool) -> Globals {
+    pub fn globals(&self, s: &Settings, res: (u32, u32), time: f32) -> Globals {
         let (w, h) = (res.0 as f32, res.1 as f32);
         let mut pal = [[0.0f32; 4]; 4];
         for i in 0..4 {
@@ -149,19 +149,19 @@ impl VisState {
             beat_count: self.last_beat_count as f32,
             flow: self.flow,
             intensity: s.intensity,
-            overlay: if overlay { 1.0 } else { 0.0 },
-            overlay_opacity: s.overlay_opacity,
+            _pad0: 0.0,
+            _pad1: 0.0,
             bloom_threshold: s.bloom_threshold,
             bloom_knee: 0.5,
             bloom_strength: s.bloom_strength,
             exposure: s.exposure,
             chromatic: s.chromatic,
             grain: s.grain,
-            vignette: if overlay { 0.0 } else { s.vignette },
+            vignette: s.vignette,
             energy: self.energy,
             beat_age: self.beat_age,
             scene_time: self.scene_time,
-            _pad: 0.0,
+            _pad2: 0.0,
             pal,
         }
     }
