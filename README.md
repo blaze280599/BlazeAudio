@@ -24,6 +24,7 @@ Settings live in the sidebar on the left. Press `F1` to show or hide it.
 | `1` | **Faulty Terminal** | A flickering CRT full of glyphs. The columns form a spectrum analyzer, highs make the glyphs churn, and beats tear rows sideways with an RGB-split glitch. |
 | `2` | **Gradient ASCII** | A soft light seen through a grid of characters, which get denser where it's brighter. Four light shapes. The edge follows the spectrum, and beats send rings of scrambled characters outward. |
 | `3` | **Phosphor Scope** | A vector oscilloscope on curved CRT glass, tracing the live waveform with a glowing afterglow, as a classic sweep or wrapped around a circle. |
+| `4` | **Crystalized Ball** | A glass sphere ringed with crackling electric strands, full of glowing dust. Beats surge the rim, fire sparks and toss the dust like a snow globe, and the spectrum shapes the flares around the rim. |
 
 Switch with the number keys, `S` for the next scene, or the buttons in **Visuals**. **Auto-switch** can move on by itself on each new track or on a timer.
 
@@ -45,7 +46,7 @@ Switch with the number keys, `S` for the next scene, or the buttons in **Visuals
 | `F1` / `Tab` | Show / hide the sidebar |
 | `F11` / `F` / `Alt+Enter` / double-click | Fullscreen |
 | `O` | Overlay mode |
-| `1` / `2` / `3` | Faulty Terminal / Gradient ASCII / Phosphor Scope |
+| `1` – `4` | Faulty Terminal / Gradient ASCII / Phosphor Scope / Crystalized Ball |
 | `S` | Next scene |
 | `Space` | Play / pause |
 | `N` / `P` | Next / previous track |

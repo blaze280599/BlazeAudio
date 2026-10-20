@@ -261,6 +261,56 @@ pub fn run(dir: &Path) {
         }
     }
 
+    // Crystalized Ball: time it, then one frame on a beat (dust tossed), one between beats,
+    // round falling dust, and one mid-intro.
+    gpu.scene = SceneId::CrystalBall;
+    settings.visual = SceneId::CrystalBall;
+    vis.scene_time = 0.0;
+    let t = Instant::now();
+    for _ in 0..150 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    let ms = t.elapsed().as_secs_f32() * 1000.0 / 150.0;
+    report += &format!("render (crystalized ball): {ms:.2} ms/frame (CPU+GPU, 1280x720, unthrottled)\n");
+    // A few frames after the beat, when the toss is near its peak.
+    let mut since = None;
+    for _ in 0..120 {
+        let cap = step(&mut gpu, &mut vis, &settings, true);
+        if since.is_none() && vis.kick > 0.8 {
+            since = Some(0);
+        }
+        if let Some(n) = since.as_mut() {
+            *n += 1;
+            if *n == 8 {
+                if let Some(img) = cap {
+                    save("ball_beat.png", img);
+                }
+                break;
+            }
+        }
+    }
+    for _ in 0..12 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("ball.png", img);
+    }
+    use crate::scenes::ball::{Grain, Motion};
+    settings.scenes.ball.motion = Motion::Fall;
+    settings.scenes.ball.grain = Grain::Round;
+    settings.scenes.ball.fill = 0.8;
+    for _ in 0..30 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("ball_fall.png", img);
+    }
+    vis.scene_time = 0.9;
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("ball_intro.png", img);
+    }
+
     let expected = (time * BPM / 60.0) as u32;
     let phases: Vec<f32> = phases.iter().map(|p| (p * 100.0).round() / 100.0).collect();
     report += &format!(

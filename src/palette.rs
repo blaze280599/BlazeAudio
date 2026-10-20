@@ -53,7 +53,7 @@ pub fn linear_to_oklab(c: Rgb) -> Rgb {
     ]
 }
 
-fn oklab_to_linear(c: Rgb) -> Rgb {
+pub fn oklab_to_linear(c: Rgb) -> Rgb {
     let l = c[0] + 0.3963377774 * c[1] + 0.2158037573 * c[2];
     let m = c[0] - 0.1055613458 * c[1] - 0.0638541728 * c[2];
     let s = c[0] - 0.0894841775 * c[1] - 1.2914855480 * c[2];

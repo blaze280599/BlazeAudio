@@ -16,6 +16,7 @@
 //! new scene up from there.
 
 pub mod ascii;
+pub mod ball;
 pub mod scope;
 mod terminal;
 
@@ -32,17 +33,19 @@ pub enum SceneId {
     Terminal,
     GradientAscii,
     Scope,
+    CrystalBall,
 }
 
 impl SceneId {
     /// In the order of the sidebar buttons and the number keys.
-    pub const ALL: [SceneId; 3] = [SceneId::Terminal, SceneId::GradientAscii, SceneId::Scope];
+    pub const ALL: [SceneId; 4] = [SceneId::Terminal, SceneId::GradientAscii, SceneId::Scope, SceneId::CrystalBall];
 
     pub fn name(self) -> &'static str {
         match self {
             SceneId::Terminal => "Faulty Terminal",
             SceneId::GradientAscii => "Gradient ASCII",
             SceneId::Scope => "Phosphor Scope",
+            SceneId::CrystalBall => "Crystalized Ball",
         }
     }
 
@@ -52,6 +55,7 @@ impl SceneId {
             SceneId::Terminal => Box::new(terminal::Terminal::new(gpu)),
             SceneId::GradientAscii => Box::new(ascii::GradientAscii::new(gpu)),
             SceneId::Scope => Box::new(scope::Scope::new(gpu, size)),
+            SceneId::CrystalBall => Box::new(ball::CrystalBall::new(gpu)),
         }
     }
 
@@ -72,6 +76,7 @@ impl SceneId {
 pub struct SceneSettings {
     pub ascii: ascii::Settings,
     pub scope: scope::Settings,
+    pub ball: ball::Settings,
 }
 
 impl SceneSettings {
@@ -81,6 +86,7 @@ impl SceneSettings {
             SceneId::Terminal => None,
             SceneId::GradientAscii => Some(&mut self.ascii),
             SceneId::Scope => Some(&mut self.scope),
+            SceneId::CrystalBall => Some(&mut self.ball),
         }
     }
 

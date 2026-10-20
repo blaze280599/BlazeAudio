@@ -16,7 +16,7 @@ BlazeAudio is a single-binary Windows music visualizer written in Rust.
 - It has **three window modes**: windowed with a docked egui sidebar, borderless fullscreen, and a transparent click-through overlay above the desktop.
 - It **controls the system output volume** through Core Audio.
 
-The current scenes are **Faulty Terminal** (CRT glyph spectrum), **Gradient ASCII** (a light seen through a glyph grid) and **Phosphor Scope** (a vector oscilloscope with afterglow). More scenes are planned; the scene framework in `src/scenes/` exists for that reason.
+The current scenes are **Faulty Terminal** (CRT glyph spectrum), **Gradient ASCII** (a light seen through a glyph grid) **Phosphor Scope** (a vector oscilloscope with afterglow) and **Crystalized Ball** (an electric glass sphere full of instanced dust particles). More scenes are planned; the scene framework in `src/scenes/` exists for that reason.
 
 ### Hard constraints
 
@@ -76,7 +76,7 @@ cargo run -- --snapshot snapshots    # headless self-test: PNGs + report.txt, no
 
 1. It synthesizes a 124 BPM track (kick, off-beat hats, snare, saw bass, pad).
 2. It feeds 8 s of it through the real analyzer (`audio::Offline`) and checks beat count and phase.
-3. It renders each scene offscreen at 1280×720 with a fixed 1/60 s step: `terminal.png`, `terminal_beat.png`, `ascii_{horizon,pinch,rise,eclipse,intro}.png` and `scope_{yt,polar}.png`.
+3. It renders each scene offscreen at 1280×720 with a fixed 1/60 s step: `terminal.png`, `terminal_beat.png`, `ascii_{horizon,pinch,rise,eclipse,intro}.png`, `scope_{yt,polar}.png` and `ball{,_beat,_fall,_intro}.png`.
 4. It writes `report.txt` (adapter, init time, ms/frame per scene, beats detected vs expected, BPM, beat phases) and `onset_trace.csv`.
 
 **The run is deterministic.** For a refactor or any change that shouldn't alter the visuals, build the old commit, snapshot into `before/`, build yours, snapshot into `after/`, and byte-compare the PNGs (`cmp`). They must be identical. For changes that are meant to alter the visuals, look at the PNGs; the Read tool can open images. Also check `report.txt`: beats should be about 21 over about 10.3 s with a BPM near 124, and phases should cluster near 0.0x.
@@ -220,7 +220,7 @@ UI conventions:
 ### 3.8 Settings (`settings.rs`)
 
 - `Settings` is one `#[serde(default)]` struct. A missing field takes its default, and unknown fields are ignored. A file that fails to parse as a whole falls back to all defaults; that's the existing behaviour.
-- Scene-specific settings live in `settings.scenes: SceneSettings`, one field per scene (`ascii`, `scope`), each that scene's own `Settings` struct. In JSON they appear as `"scenes": { "ascii": {..}, "scope": {..} }`.
+- Scene-specific settings live in `settings.scenes: SceneSettings`, one field per scene (`ascii`, `scope`, `ball`), each that scene's own `Settings` struct. In JSON they appear as `"scenes": { "ascii": {..}, "scope": {..}, "ball": {..} }`.
 - `load()` parses into `serde_json::Value`, runs `migrate()`, then deserializes. `migrate()` currently moves legacy flat `ascii_*` and `scope_*` keys into `scenes`. Unit tests next to it cover migration and round-tripping.
 - **Stored names are an API.** The field names and enum variant names in `Settings`, `SceneSettings`, scene `Settings` structs and `SceneId` are what users' files contain. Renaming one silently resets that value for everyone unless you add a migration or `#[serde(alias = "...")]`. There's an example of the alias approach on `scope::Mode::Yt`.
 - "The look" (what Randomize, Reset and Undo touch) is `Settings::copy_look` and `randomize_visuals`: every scene's settings plus the post effects (intensity, bloom, exposure, chromatic, grain, vignette). The current scene and render scale are deliberately excluded.
@@ -350,6 +350,8 @@ Variations:
 - **A texture built once** (atlas, LUT): build it in `new()` and keep the `wgpu::Texture` alive in a field (`_atlas`), along with its bind group. See `ascii.rs`.
 - **Size-dependent textures or feedback** (trails, afterglow, reaction-diffusion): take `size` in `new(gpu, size)`, rebuild in `resize()`, ping-pong two textures, and clear history when `f.fresh`. Use a compact format such as `R16Float` when you only need intensity. See `scope.rs`.
 - **Geometry instead of a full-screen pass**: build a custom `RenderPipeline` with `gpu.device` and `gpu.layout(..)`, and draw instanced quads from `A.wave` or `A.bands` in the vertex shader. Again, `scope.rs` (`vs_beam`) is the example.
+- **Per-instance data the vertex shader reads** (particle tables): group 1's shared layouts are fragment-only textures, so make your own bind group layout with `VERTEX` visibility (a read-only storage buffer works well) and a pipeline layout of `[&gpu.layouts.g0, &yours]`. See `ball.rs` (dust).
+- **Constant tables too big for `Params`**: generate them as WGSL `var<private>` arrays in Rust and prepend them to the shader source before `gpu.module`. See `ball.rs` (`strand_tables`).
 - **Scene-specific analysis** (zero-crossing triggers, peak picking) belongs in the scene's `params()`, reading `vis.wave`, `vis.bands`, `vis.dt` and the other public fields. It doesn't belong in `VisState`. If it needs state between frames, keep it on the scene struct.
 
 **3. Register** in `src/scenes/mod.rs`:

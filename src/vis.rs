@@ -116,6 +116,11 @@ impl VisState {
         }
     }
 
+    /// How many beats the analyzer has counted; a change means a new beat this frame.
+    pub fn beats(&self) -> u32 {
+        self.last_beat_count
+    }
+
     /// The palette on screen (mid-crossfade while it changes).
     pub fn palette(&self) -> Palette {
         self.pal_cur
