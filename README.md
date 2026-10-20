@@ -130,3 +130,7 @@ Each scene is a self-contained module, so new scenes can be added without touchi
 ## Credits
 
 Faulty Terminal and Gradient ASCII are inspired by the [React Bits](https://reactbits.dev) backgrounds of the same names. Faulty Terminal is written from scratch for wgpu/WGSL, and Gradient ASCII is ported from the React Bits WebGL2 shader. Both are driven by audio instead of the cursor. The glyphs use Hack, the monospace font bundled with egui. The volume slider is ported from the React Bits WakeSlider.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
