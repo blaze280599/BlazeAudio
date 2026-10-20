@@ -2,16 +2,16 @@
 
 An HDR music visualizer for Windows. It listens to whatever your PC is playing (Spotify, a browser, a game, anything) and turns it into audio-reactive visuals. It picks up the song title and album art, takes its colours from the cover, and runs in a window or fullscreen.
 
-Everything ships as one `blazeaudio.exe`. There's nothing to install and no account to sign into, and it uses no network.
+Everything ships as one portable `blazeaudio.exe`. There's nothing to install and no account to sign into. The only time it goes online is to check GitHub for a new version, which you can turn off.
 
 ## Requirements
 
-- Windows 10 or 11
+- Windows 10 (version 1809 or later) or 11
 - A DirectX 12 capable GPU
 
 ## Getting started
 
-1. Run `blazeaudio.exe`.
+1. Download `blazeaudio.exe` from the [latest release](https://github.com/blaze280599/BlazeAudio/releases/latest), put it in any folder you can write to (Documents, a USB stick, wherever), and run it. The exe isn't code-signed, so the first time Windows SmartScreen may say it "protected your PC": click **More info**, then **Run anyway**.
 2. Play music. BlazeAudio visualizes everything your default output device plays.
 3. If the music app reports what's playing to Windows (Spotify does), you'll see the title, artist and cover, and the visuals take on the cover's colours.
 
@@ -37,6 +37,7 @@ Switch with the number keys, `S` for the next scene, or the buttons in **Visuals
 - **Window modes**: windowed with the sidebar, or borderless fullscreen (`F11`) for just the visuals.
 - **Look controls**: bloom, exposure, chromatic aberration, film grain, vignette and per-scene options, each resettable on its own. **Randomize** rolls a new look, **Undo** steps back and **Reset** restores the defaults.
 - **Lightweight**: about 0.1% CPU when idle and under 1% while playing, with around 20 MB of memory. It slows down when nothing is playing and stops rendering when hidden.
+- **Updates itself**: on launch it checks GitHub for a new release. By default it downloads it in the background and swaps it in, so the next start runs the new version (or click **Restart now** under General). Set **Updates** to **Notify** to just be told, or **Off** to never go online unless you click **Check now**.
 - **Remembers you**: settings, window position and size persist between runs. Only one copy runs at a time.
 
 ## Controls
@@ -63,7 +64,7 @@ The sidebar has five sections:
 - **Visuals**: scene, auto-switch, the scene's own options, and the shared look effects
 - **Audio**: sensitivity, how fast bars rise and fall, beat sensitivity
 - **Palette**: album colours on or off, and the fallback palette
-- **General**: window and startup mode, theme (Dark, OLED black, Light), on-scene extras
+- **General**: window and startup mode, theme (Dark, OLED black, Light), on-scene extras, updates
 - **Hotkeys**: the full key list
 
 A changed setting shows a reset button next to it; double-clicking its label also resets it. Settings are saved to `%APPDATA%\BlazeAudio\settings.json`.
@@ -77,6 +78,8 @@ cargo build --release
 ```
 
 The output is `target\release\blazeaudio.exe`, statically linked, so no VC++ redistributable is needed.
+
+Releases are built by GitHub Actions: bump `version` in `Cargo.toml`, commit, then push a matching tag (`git tag v1.2.0 && git push origin v1.2.0`). The workflow builds the exe and publishes it with its SHA-256 checksum, which is what the in-app updater downloads.
 
 To check that everything works without opening a window, run the self-test. It plays a synthetic track through the analyzer, renders every scene to PNGs in `out/`, and writes a report:
 

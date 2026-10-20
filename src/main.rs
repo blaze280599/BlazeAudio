@@ -9,6 +9,7 @@ mod settings;
 mod snapshot;
 mod sys;
 mod ui;
+mod update;
 mod vis;
 mod volume;
 mod wake;
@@ -30,6 +31,7 @@ use media::{MediaCmd, MediaWatcher, TrackInfo};
 use palette::PRESETS;
 use scenes::SceneId;
 use settings::{AutoScene, Settings, WindowGeom, WindowMode};
+use update::Updater;
 use vis::VisState;
 
 pub fn make_instance() -> wgpu::Instance {
@@ -68,17 +70,26 @@ fn fatal(msg: &str) {
 const WINDOW_CLASS: &str = "BlazeAudio";
 
 /// True when another BlazeAudio is already running; that one is brought to the front. Two
-/// copies would fight over the settings file.
-fn already_running() -> bool {
+/// copies would fight over the settings file. With `wait` (a restart after an update), the
+/// old copy gets a few seconds to close first.
+fn already_running(wait: bool) -> bool {
     use windows::core::{w, HSTRING};
-    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
     use windows::Win32::System::Threading::CreateMutexW;
     use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE};
+    let tries = if wait { 50 } else { 1 };
     unsafe {
-        // Held (never closed) for the life of the process.
-        let Ok(_mutex) = CreateMutexW(None, false, w!("Local\\BlazeAudio.SingleInstance")) else { return false };
-        if GetLastError() != ERROR_ALREADY_EXISTS {
-            return false;
+        for i in 0..tries {
+            // Held (never closed) for the life of the process.
+            let Ok(mutex) = CreateMutexW(None, false, w!("Local\\BlazeAudio.SingleInstance")) else { return false };
+            if GetLastError() != ERROR_ALREADY_EXISTS {
+                return false;
+            }
+            if i + 1 < tries {
+                // Our handle would keep the mutex alive after the old copy exits.
+                let _ = CloseHandle(mutex);
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
         if let Ok(hwnd) = FindWindowW(&HSTRING::from(WINDOW_CLASS), None) {
             if IsIconic(hwnd).as_bool() {
@@ -123,6 +134,10 @@ struct App {
     instance: wgpu::Instance,
     audio: AudioEngine,
     media: MediaWatcher,
+    updater: Updater,
+    /// The updater's status as of `update_ver`, copied only when it changes.
+    update: update::Status,
+    update_ver: u64,
     vis: VisState,
     gfx: Option<Gfx>,
     ui: ui::UiState,
@@ -169,6 +184,7 @@ impl App {
         let settings = Settings::load();
         let audio = AudioEngine::start(audio_params(&settings));
         let media = MediaWatcher::start();
+        let updater = Updater::start(settings.updates);
         let pal = PRESETS[settings.preset_palette.min(PRESETS.len() - 1)].1;
         let now = Instant::now();
         Self {
@@ -176,6 +192,9 @@ impl App {
             instance: make_instance(),
             audio,
             media,
+            updater,
+            update: update::Status::Idle,
+            update_ver: 0,
             vis: VisState::new(pal),
             gfx: None,
             ui: ui::UiState::new(),
@@ -413,6 +432,11 @@ impl App {
         self.sync_media();
         g = self.gfx.take().unwrap();
 
+        if self.updater.version() != self.update_ver {
+            self.update_ver = self.updater.version();
+            self.update = self.updater.status();
+        }
+
         self.toast_t = (self.toast_t - dt).max(0.0);
         self.volume_flash = (self.volume_flash - dt).max(0.0);
         self.seek_flash = (self.seek_flash - dt).max(0.0);
@@ -468,6 +492,7 @@ impl App {
                         volume: &self.volume,
                         volume_alpha,
                         timeline_alpha,
+                        update: &self.update,
                     },
                 );
             });
@@ -554,6 +579,14 @@ impl App {
                 ui::UiAction::SetMode(m) => self.apply_mode(m),
                 ui::UiAction::HideSidebar => self.set_sidebar_visible(false),
                 ui::UiAction::Media(cmd) => self.media.send(cmd),
+                ui::UiAction::Update(cmd) => self.updater.send(cmd),
+                ui::UiAction::Restart => {
+                    self.remember_window();
+                    self.settings.save();
+                    if self.updater.relaunch() {
+                        el.exit();
+                    }
+                }
             }
         }
 
@@ -752,7 +785,7 @@ fn main() {
         snapshot::run(std::path::Path::new(&dir));
         return;
     }
-    if already_running() {
+    if already_running(args.iter().any(|a| a == "--relaunch")) {
         return;
     }
     let event_loop = match EventLoop::new() {

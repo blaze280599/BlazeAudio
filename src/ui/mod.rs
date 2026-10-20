@@ -26,6 +26,7 @@ use crate::media::{MediaCmd, TrackInfo, ART_SIZE};
 use crate::palette::Palette;
 use crate::settings::{Settings, UiTheme, WindowMode};
 use crate::sys::ProcStats;
+use crate::update::{Status as UpdateStatus, UpdateCmd};
 use crate::vis::VisState;
 use crate::volume::Volume;
 use crate::wake::WakeSlider;
@@ -38,6 +39,9 @@ pub enum UiAction {
     SetMode(WindowMode),
     HideSidebar,
     Media(MediaCmd),
+    Update(UpdateCmd),
+    /// Close and start the exe on disk (the new version after an update).
+    Restart,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,6 +99,7 @@ pub struct UiCtx<'a> {
     pub volume_alpha: f32,
     /// Opacity of the timeline: the on-scene controls, or a flash after a seek key.
     pub timeline_alpha: f32,
+    pub update: &'a UpdateStatus,
 }
 
 impl UiState {

@@ -15,6 +15,7 @@ BlazeAudio is a single-binary Windows music visualizer written in Rust.
 - It **renders audio-reactive HDR scenes** with wgpu on DirectX 12, followed by bloom, ACES tonemapping and film effects.
 - It has **two window modes**: windowed with a docked egui sidebar, and borderless fullscreen.
 - It **controls the system output volume** through Core Audio.
+- It **updates itself** from this repo's GitHub releases. It's a portable exe, so the update replaces the exe in place.
 
 The current scenes are **Faulty Terminal** (CRT glyph spectrum), **Gradient ASCII** (a light seen through a glyph grid) **Phosphor Scope** (a vector oscilloscope with afterglow) and **Crystalized Ball** (an electric glass sphere full of instanced dust particles). More scenes are planned; the scene framework in `src/scenes/` exists for that reason.
 
@@ -26,10 +27,10 @@ These are product decisions. Don't change them without the user asking.
 |---|---|
 | Windows only | The `windows` crate, WASAPI, GSMTC and DX12 are used directly. No cross-platform abstractions or `cfg` gates for other OSes. |
 | DX12 only, FXC shader compiler | `make_instance()` in `main.rs` selects `Backends::DX12` and `Dx12Compiler::Fxc`. Shaders must compile under FXC (see Pitfalls §9). |
-| One self-contained `.exe` | Static CRT (`.cargo/config.toml`), no runtime asset files. Shaders, fonts and icons are embedded (`include_str!`, `epaint_default_fonts`, painted icons). Don't add files the exe must load at runtime. |
+| Portable, one self-contained `.exe` | No installer and no code signing. Static CRT (`.cargo/config.toml`), no runtime asset files. Shaders, fonts and icons are embedded (`include_str!`, `epaint_default_fonts`, painted icons). Don't add files the exe must load at runtime. |
 | Very low idle cost | About 0.1% CPU idle and 0.6% playing, about 20 MB working set. Don't add per-frame allocations in hot paths, polling threads, or work that runs while silent or hidden. |
-| No network | Metadata comes from the OS, not web APIs. Don't add HTTP clients or telemetry. |
-| Single instance | A named mutex plus `FindWindowW` on the window class `BlazeAudio`. A second launch brings the first window to the front and exits. |
+| Network only for update checks | The one network use is `update.rs` asking GitHub for the latest release and downloading it, which the Updates setting can turn off. Metadata comes from the OS, not web APIs. Don't add other network calls, telemetry or HTTP crates (`update.rs` uses WinRT `HttpClient` from the `windows` crate). |
+| Single instance | A named mutex plus `FindWindowW` on the window class `BlazeAudio`. A second launch brings the first window to the front and exits. `--relaunch` (used by Restart now after an update) instead waits up to 5 s for the old copy to close. |
 
 ---
 
@@ -69,6 +70,7 @@ cargo run -- --snapshot snapshots    # headless self-test: PNGs + report.txt, no
 |---|---|
 | `BLAZE_IGNORE_AUDIO=1` | Render as if silent, to measure the idle path. |
 | `BLAZE_TRACE=<file.csv>` | Dump about 10 s of the live onset/threshold curve from the analyzer. |
+| `BLAZE_UPDATE_URL=<url>` | Dev builds only: ask this URL instead of GitHub for the latest release, and check on launch. `scripts/update-test.sh` uses it to test an update end to end. |
 
 ### The snapshot self-test (`snapshot.rs`)
 
@@ -94,6 +96,7 @@ Python on this machine may not have PIL, so compare files with `cmp` or a hash r
 | `audio-capture` | `audio.rs` `capture_loop` | `AudioFrame` (bands, waveform, beat count/strength, hat, energy, BPM, level) | `AudioEngine::snapshot()` clones it out of a `Mutex` |
 | `media-session` | `media.rs` `watch_loop` | `TrackInfo` (title, artist, album, art RGBA, palette, `Playback`) plus `track_version` / `art_version` counters | `MediaWatcher::snapshot()`, `versions()`, `playback()`; commands in through an `mpsc` channel |
 | `volume` | `volume.rs` | Level and mute as atomics | `Volume::level()` / `muted()`; changes go out through a channel |
+| `update` | `update.rs` `worker` | `update::Status` plus a `version` counter | `Updater::version()` / `status()`; `UpdateCmd::{Check, Install}` in through a channel |
 | main (winit) | `main.rs` `App` | Everything else | — |
 
 Rules:
@@ -118,7 +121,7 @@ gpu.encode(): scene → bloom (6 levels) → tonemap into viewport
 gpu.encode_egui()                                        ← UI on top
 submit, present
 drawer open → audio.set_params(); drawer just closed → settings.save()
-apply UiActions (SetMode, HideSidebar, Media)
+apply UiActions (SetMode, HideSidebar, Media, Update, Restart)
 idle = nothing on screen needs updates && silent > 3 s
 schedule(): ControlFlow::Wait + request_redraw | WaitUntil(idle period) | Wait when minimized/occluded
 ```
@@ -191,7 +194,7 @@ Each hop does the following:
 
 The UI is **egui**, in immediate mode, redrawn every frame it runs.
 
-- **Contract**: `UiState::draw(ctx, UiCtx) -> (Vec<UiAction>, Rect)`. `UiCtx` carries `&mut Settings` (edited in place) plus read-only state: track, vis, palette, mode, stats, fade alphas, and so on. Anything that isn't a setting is requested with a `UiAction` (`SetMode`, `HideSidebar`, `Media(MediaCmd)`) and applied by `App::frame` after rendering. The UI never holds references to `App`, `Gpu` or workers, except `&Volume`, whose setters only send on a channel.
+- **Contract**: `UiState::draw(ctx, UiCtx) -> (Vec<UiAction>, Rect)`. `UiCtx` carries `&mut Settings` (edited in place) plus read-only state: track, vis, palette, mode, stats, fade alphas, update status, and so on. Anything that isn't a setting is requested with a `UiAction` (`SetMode`, `HideSidebar`, `Media(MediaCmd)`, `Update(UpdateCmd)`, `Restart`) and applied by `App::frame` after rendering. The UI never holds references to `App`, `Gpu` or workers, except `&Volume`, whose setters only send on a channel.
 - The returned `Rect`, in points, is the area left for the scene once the side panels have taken their space.
 
 | File | Contents |
@@ -222,7 +225,16 @@ UI conventions:
 - `load()` parses into `serde_json::Value`, runs `migrate()`, then deserializes. `migrate()` currently moves legacy flat `ascii_*` and `scope_*` keys into `scenes`. Unit tests next to it cover migration and round-tripping.
 - **Stored names are an API.** The field names and enum variant names in `Settings`, `SceneSettings`, scene `Settings` structs and `SceneId` are what users' files contain. Renaming one silently resets that value for everyone unless you add a migration or `#[serde(alias = "...")]`. There's an example of the alias approach on `scope::Mode::Yt`.
 - "The look" (what Randomize, Reset and Undo touch) is `Settings::copy_look` and `randomize_visuals`: every scene's settings plus the post effects (intensity, bloom, exposure, chromatic, grain, vignette). The current scene and render scale are deliberately excluded.
-- "Reset all settings" (General) keeps theme, start mode, sidebar size and window geometry.
+- "Reset all settings" (General) keeps theme, start mode, the Updates choice, sidebar size and window geometry.
+
+### 3.9 Updates (`update.rs`)
+
+- `settings.updates` (`UpdateMode::{Off, Notify, Auto}`, default Auto) is read once at launch. Unless it's Off, the worker waits 5 s and asks `api.github.com/repos/blaze280599/BlazeAudio/releases/latest`. With Auto it then installs what it finds. Check now and Install in General send `UpdateCmd`s whatever the mode.
+- **Install**: download the exe and its `.sha256` asset, check the hash (via WinRT `HashAlgorithmProvider`) and the `MZ` header, write `<exe>.new`, rename the running `<exe>` to `<exe>.old`, rename `.new` to `<exe>`. If the second rename fails the first is undone. The worker deletes `.old` and any stray `.new` on the next start, retrying for a few seconds while a just-closed copy exits.
+- The checksum catches broken downloads only. Without code signing nothing proves who built the release, so the security of updates is the security of the GitHub account.
+- **Restart now** (`UiAction::Restart`) saves settings, starts the exe on disk with `--relaunch` and exits.
+- A folder the user can't write to (Program Files, say) makes Install fail with a message telling them to move the exe.
+- Files downloaded by the app carry no Mark of the Web, so an updated exe doesn't trigger SmartScreen again; only the user's first browser download does.
 
 ---
 
@@ -424,6 +436,13 @@ Add a `UiAction` variant, push it from the UI code, and handle it in the `for a 
 
 Keep the capture callback cheap: no allocation or locking beyond the existing per-hop publish.
 
+### 5.8 Cut a release
+
+1. Bump `version` in `Cargo.toml` (semver; the updater compares `major.minor.patch`), then `cargo build` so `Cargo.lock` follows, and commit both.
+2. Tag and push: `git tag v1.2.0 && git push origin main v1.2.0`. The tag must be the version with a `v` in front; the workflow refuses a mismatch.
+3. `.github/workflows/release.yml` runs the tests, builds the release exe, writes `blazeaudio.exe.sha256`, and publishes a release with both files and generated notes. Every running copy set to Notify or Auto sees it on its next launch.
+4. Don't mark a release you want installed as a prerelease: `releases/latest` skips prereleases.
+
 ---
 
 ## 6. Verification checklist (before saying "done")
@@ -471,6 +490,7 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 | Change volume control | `src/volume.rs` (worker), `ui/overlay.rs` `volume_bar`, `wake.rs` (slider widget) |
 | Change window modes, keys or frame pacing | `src/main.rs` |
 | Change CPU/RAM stats or working-set trimming | `src/sys.rs` |
+| Change update checks, download or the exe swap | `src/update.rs`, the release workflow in `.github/workflows/release.yml` |
 | Change the sidebar or drawer | `src/ui/sidebar.rs`, `src/ui/drawer.rs` |
 | Change UI colours or the egui style | `src/ui/theme.rs` |
 | Change the self-test | `src/snapshot.rs` |
@@ -489,6 +509,8 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 - **`panic = "abort"`** in release: a panic anywhere ends the process. Prefer `Option` and `let Some(..) else` over `unwrap()` in new code.
 - **Settings compatibility**: renaming a field, enum variant or `SceneId` resets users' saved values unless you migrate (§3.8).
 - **Running the app touches real state**: the settings file, the system volume (if you exercise the volume bar), and the user's media playback (transport commands). Use a scratch `APPDATA`, and don't send media or volume commands without the user's say-so.
+- **The updater and dev builds**: dev builds skip the launch check (unless `BLAZE_UPDATE_URL` is set), so running from `target/` never replaces that exe unasked. Check now and Install still work in a dev build and *will* replace the exe you're running, so test installs on a copy in a scratch folder.
+- **Release asset names are an API**: the updater looks for `blazeaudio.exe` and `blazeaudio.exe.sha256` (`<hex>  blazeaudio.exe`) on the latest non-prerelease release, and compares its `vX.Y.Z` tag with `CARGO_PKG_VERSION`. Renaming either asset or the repo breaks updates for every installed copy.
 - **Line endings**: the repo stores LF, with `core.autocrlf=true` on this machine. Git's LF→CRLF warnings on commit are expected and harmless.
 
 ---

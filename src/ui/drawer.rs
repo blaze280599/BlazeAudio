@@ -8,7 +8,8 @@ use super::widgets::{choice, heading, icon_button, knob, num, segmented, spectru
 use super::{Section, UiAction, UiCtx, UiState, SECTIONS};
 use crate::palette::{Palette, PRESETS};
 use crate::scenes::SceneId;
-use crate::settings::{AutoScene, Settings, UiTheme, WindowMode};
+use crate::settings::{AutoScene, Settings, UiTheme, UpdateMode, WindowMode};
+use crate::update::{Status as UpdateStatus, UpdateCmd, VERSION};
 
 /// Looks to go back to with Undo (taken before each Randomize or Reset).
 const UNDO_DEPTH: usize = 32;
@@ -116,8 +117,19 @@ impl UiState {
         ui.checkbox(&mut s.show_stats, "Performance stats (F3)");
         knob(ui, t, "Idle frame cap", &mut s.idle_fps, d.idle_fps, 5..=60, num(0, " fps"));
 
+        heading(ui, t, "Updates");
+        let modes = [(UpdateMode::Off, "Off"), (UpdateMode::Notify, "Notify"), (UpdateMode::Auto, "Automatic")];
+        choice(ui, t, "On launch", &mut s.updates, d.updates, &modes);
+        let what = match s.updates {
+            UpdateMode::Off => "Never goes online unless you click Check now.",
+            UpdateMode::Notify => "Checks GitHub on launch and shows here when a new version is out.",
+            UpdateMode::Auto => "Checks GitHub on launch and installs a new version, which runs from the next start.",
+        };
+        ui.label(RichText::new(what).small().color(t.faint));
+        update_row(ui, t, c.update, actions);
+
         ui.separator();
-        ui.label(RichText::new(format!("GPU: {}  ·  DX12", c.adapter)).small().color(t.faint));
+        ui.label(RichText::new(format!("BlazeAudio {VERSION}  ·  GPU: {}  ·  DX12", c.adapter)).small().color(t.faint));
         if !self.confirm_reset {
             if ui.small_button("Reset all settings…").clicked() {
                 self.confirm_reset = true;
@@ -130,14 +142,15 @@ impl UiState {
                 .inner_margin(Margin::same(10))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("Reset every setting to its default? Theme, startup mode, sidebar size and window position stay.").color(t.text));
+                    ui.label(RichText::new("Reset every setting to its default? Theme, startup mode, updates, sidebar size and window position stay.").color(t.text));
                     ui.horizontal(|ui| {
                         if ui.button("Reset").clicked() {
-                            let (mode, expanded, theme, window) = (s.start_mode, s.sidebar_expanded, s.theme, s.window);
+                            let (mode, expanded, theme, updates, window) = (s.start_mode, s.sidebar_expanded, s.theme, s.updates, s.window);
                             *s = Settings::default();
                             s.start_mode = mode;
                             s.sidebar_expanded = expanded;
                             s.theme = theme;
+                            s.updates = updates;
                             s.window = window;
                             self.confirm_reset = false;
                         }
@@ -146,6 +159,37 @@ impl UiState {
                         }
                     });
                 });
+        }
+    }
+}
+
+/// Where the updater is, and the one button that moves it on.
+fn update_row(ui: &mut egui::Ui, t: &Tokens, st: &UpdateStatus, actions: &mut Vec<UiAction>) {
+    let (text, button) = match st {
+        UpdateStatus::Idle => (format!("Version {VERSION}"), Some(("Check now", UpdateCmd::Check))),
+        UpdateStatus::Checking => ("Checking…".to_owned(), None),
+        UpdateStatus::UpToDate => (format!("Version {VERSION} is the latest"), Some(("Check now", UpdateCmd::Check))),
+        UpdateStatus::NoReleases => ("No releases published yet".to_owned(), Some(("Check now", UpdateCmd::Check))),
+        UpdateStatus::Available(v) => (format!("Version {v} is available"), Some(("Install", UpdateCmd::Install))),
+        UpdateStatus::Downloading(v) => (format!("Installing {v}…"), None),
+        UpdateStatus::Installed(v) => (format!("Version {v} is ready"), None),
+        UpdateStatus::Failed(e) => (e.clone(), Some(("Try again", UpdateCmd::Check))),
+    };
+    ui.horizontal(|ui| {
+        if matches!(st, UpdateStatus::Checking | UpdateStatus::Downloading(_)) {
+            ui.add(egui::Spinner::new().size(14.0).color(t.dim));
+        }
+        let col = if matches!(st, UpdateStatus::Failed(_)) { t.dim } else { t.text };
+        ui.add(egui::Label::new(RichText::new(text).color(col)).wrap());
+    });
+    if matches!(st, UpdateStatus::Installed(_)) {
+        ui.label(RichText::new("It runs from the next start.").small().color(t.faint));
+        if ui.button("Restart now").clicked() {
+            actions.push(UiAction::Restart);
+        }
+    } else if let Some((label, cmd)) = button {
+        if ui.button(label).clicked() {
+            actions.push(UiAction::Update(cmd));
         }
     }
 }

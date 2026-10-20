@@ -1,0 +1,45 @@
+# Builds the release exe and publishes it when a version tag is pushed:
+#   git tag v1.2.0 && git push origin v1.2.0
+# The tag must match `version` in Cargo.toml. The app's updater looks for exactly these two
+# assets on the latest release: blazeaudio.exe and blazeaudio.exe.sha256.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} doesn't match Cargo.toml version $v" }
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash target/release/blazeaudio.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  blazeaudio.exe" | Out-File -Encoding ascii -NoNewline blazeaudio.exe.sha256
+
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" target/release/blazeaudio.exe blazeaudio.exe.sha256 --title "BlazeAudio ${{ github.ref_name }}" --generate-notes

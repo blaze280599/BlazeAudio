@@ -39,6 +39,17 @@ pub enum UiTheme {
     Light,
 }
 
+/// What the app does about new releases.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum UpdateMode {
+    /// Never goes online unless asked with Check now.
+    Off,
+    /// Checks on launch and says so when a new version is out.
+    Notify,
+    /// Checks on launch and installs the new version for the next start.
+    Auto,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -75,6 +86,7 @@ pub struct Settings {
     pub start_mode: WindowMode,
     pub sidebar_expanded: bool,
     pub theme: UiTheme,
+    pub updates: UpdateMode,
     /// Where the window was when the app last closed.
     pub window: Option<WindowGeom>,
 }
@@ -108,6 +120,7 @@ impl Default for Settings {
             start_mode: WindowMode::Windowed,
             sidebar_expanded: true,
             theme: UiTheme::Dark,
+            updates: UpdateMode::Auto,
             window: None,
         }
     }

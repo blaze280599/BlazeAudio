@@ -29,6 +29,8 @@ features = [
     "Foundation",
     "Foundation_Collections",
     "Media_Control",
+    "Security_Cryptography",
+    "Security_Cryptography_Core",
     "Storage_Streams",
     "Win32_Foundation",
     "Win32_Media_Audio",
@@ -41,6 +43,9 @@ features = [
     "Win32_System_ProcessStatus",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    "Web_Http",
+    "Web_Http_Filters",
+    "Web_Http_Headers",
 ]
 
 [profile.release]

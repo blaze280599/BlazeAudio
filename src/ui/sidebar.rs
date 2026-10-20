@@ -6,8 +6,9 @@ use super::icons::{paint_icon, Icon};
 use super::playback::{seek_bar, transport};
 use super::theme::Tokens;
 use super::widgets::{icon_button, nav_item, spectrum_meter};
-use super::{UiAction, UiCtx, UiState, SECTIONS};
+use super::{Section, UiAction, UiCtx, UiState, SECTIONS};
 use crate::media::MediaCmd;
+use crate::update::Status as UpdateStatus;
 use crate::settings::WindowMode;
 
 impl UiState {
@@ -28,7 +29,12 @@ impl UiState {
 
         for (sec, name, icon) in SECTIONS {
             let open = self.drawer == Some(sec);
-            if nav_item(ui, t, icon, name, open, expanded).clicked() {
+            let resp = nav_item(ui, t, icon, name, open, expanded);
+            // A dot on General while an update waits there.
+            if sec == Section::General && matches!(c.update, UpdateStatus::Available(_) | UpdateStatus::Installed(_)) {
+                ui.painter().circle_filled(egui::pos2(resp.rect.left() + 29.0, resp.rect.center().y - 7.0), 3.5, accent);
+            }
+            if resp.clicked() {
                 self.drawer = if open { None } else { Some(sec) };
             }
         }
