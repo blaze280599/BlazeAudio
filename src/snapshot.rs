@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use crate::audio::Offline;
 use crate::gpu::Gpu;
+use crate::media::TrackInfo;
 use crate::palette::{self, PRESETS};
 use crate::scenes::SceneId;
 use crate::settings::Settings;
@@ -309,6 +310,73 @@ pub fn run(dir: &Path) {
     vis.scene_time = 0.9;
     if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
         save("ball_intro.png", img);
+    }
+
+    // Picture Disc: needs a track. Time it, then the cover disc, the card glitching in for a
+    // long title with Japanese in it (cut short, fallback font), chrome on black, and no track.
+    let art = std::sync::Arc::new(art);
+    let track = |title: &str| TrackInfo {
+        title: title.to_owned(),
+        artist: "Blaze Unit".to_owned(),
+        album: "Night Broadcast".to_owned(),
+        art: Some(art.clone()),
+        ..Default::default()
+    };
+    gpu.set_track(&track("Midnight Signal"));
+    gpu.scene = SceneId::PictureDisc;
+    settings.visual = SceneId::PictureDisc;
+    vis.scene_time = 0.0;
+    let t = Instant::now();
+    for _ in 0..150 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    let ms = t.elapsed().as_secs_f32() * 1000.0 / 150.0;
+    report += &format!("render (picture disc): {ms:.2} ms/frame (CPU+GPU, 1280x720, unthrottled)\n");
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("disc.png", img);
+    }
+    // A dark black-and-white cover: the backdrop should stay grey, not take the palette's tint.
+    let mono: Vec<u8> = art.as_chunks::<4>().0.iter().flat_map(|p| {
+        let l = ((p[0] as u32 * 54 + p[1] as u32 * 183 + p[2] as u32 * 19) / 256 / 3) as u8;
+        [l, l, l, 255]
+    }).collect();
+    gpu.set_track(&TrackInfo { art: Some(std::sync::Arc::new(mono)), ..track("Hold You") });
+    for _ in 0..40 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("disc_mono.png", img);
+    }
+    gpu.set_track(&track("夜のドライブ (Night Drive) - Extended Version That Goes On"));
+    for _ in 0..8 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("disc_intro.png", img);
+    }
+    for _ in 0..40 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("disc_long.png", img);
+    }
+    use crate::scenes::disc::{Backdrop, Face};
+    settings.scenes.disc.face = Face::Chrome;
+    settings.scenes.disc.backdrop = Backdrop::Black;
+    for _ in 0..20 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("disc_chrome.png", img);
+    }
+    settings.scenes.disc = Default::default();
+    gpu.set_track(&TrackInfo::default());
+    for _ in 0..60 {
+        step(&mut gpu, &mut vis, &settings, false);
+    }
+    if let Some(img) = step(&mut gpu, &mut vis, &settings, true) {
+        save("disc_empty.png", img);
     }
 
     let expected = (time * BPM / 60.0) as u32;

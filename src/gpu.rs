@@ -496,6 +496,14 @@ impl Gpu {
         }
     }
 
+    /// Hands every scene the new track (see `Scene::track`).
+    pub fn set_track(&mut self, track: &crate::media::TrackInfo) {
+        let ctx = GpuCtx { device: &self.device, queue: &self.queue, layouts: &self.layouts };
+        for s in &mut self.scenes {
+            s.track(&ctx, track);
+        }
+    }
+
     pub fn scene_size(&self) -> (u32, u32) {
         (self.targets.w, self.targets.h)
     }

@@ -11,12 +11,14 @@
 //! 3. Here: a `mod` line, a `SceneId` variant (also in `ALL`), its arm in `SceneId::build` and
 //!    `SceneId::name`, and, if it has settings, a field in `SceneSettings` and its arm in
 //!    `SceneSettings::config`.
+//! 4. A scene that shows the track (title, cover) overrides `Scene::track`; see disc.rs.
 //!
 //! The sidebar buttons, number keys, Next scene, auto-switch, Randomize and Reset all pick the
 //! new scene up from there.
 
 pub mod ascii;
 pub mod ball;
+pub mod disc;
 pub mod scope;
 mod terminal;
 
@@ -24,6 +26,7 @@ use bytemuck::Pod;
 use serde::{Deserialize, Serialize};
 
 use crate::gpu::GpuCtx;
+use crate::media::TrackInfo;
 use crate::ui::Tokens;
 use crate::vis::VisState;
 
@@ -34,11 +37,12 @@ pub enum SceneId {
     GradientAscii,
     Scope,
     CrystalBall,
+    PictureDisc,
 }
 
 impl SceneId {
     /// In the order of the sidebar buttons and the number keys.
-    pub const ALL: [SceneId; 4] = [SceneId::Terminal, SceneId::GradientAscii, SceneId::Scope, SceneId::CrystalBall];
+    pub const ALL: [SceneId; 5] = [SceneId::Terminal, SceneId::GradientAscii, SceneId::Scope, SceneId::CrystalBall, SceneId::PictureDisc];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -46,6 +50,7 @@ impl SceneId {
             SceneId::GradientAscii => "Gradient ASCII",
             SceneId::Scope => "Phosphor Scope",
             SceneId::CrystalBall => "Crystalized Ball",
+            SceneId::PictureDisc => "Picture Disc",
         }
     }
 
@@ -56,6 +61,7 @@ impl SceneId {
             SceneId::GradientAscii => Box::new(ascii::GradientAscii::new(gpu)),
             SceneId::Scope => Box::new(scope::Scope::new(gpu, size)),
             SceneId::CrystalBall => Box::new(ball::CrystalBall::new(gpu)),
+            SceneId::PictureDisc => Box::new(disc::PictureDisc::new(gpu, size)),
         }
     }
 
@@ -77,6 +83,7 @@ pub struct SceneSettings {
     pub ascii: ascii::Settings,
     pub scope: scope::Settings,
     pub ball: ball::Settings,
+    pub disc: disc::Settings,
 }
 
 impl SceneSettings {
@@ -87,6 +94,7 @@ impl SceneSettings {
             SceneId::GradientAscii => Some(&mut self.ascii),
             SceneId::Scope => Some(&mut self.scope),
             SceneId::CrystalBall => Some(&mut self.ball),
+            SceneId::PictureDisc => Some(&mut self.disc),
         }
     }
 
@@ -124,6 +132,9 @@ pub struct SceneFrame<'a> {
 pub trait Scene: Send {
     /// The scene render size changed. Scenes with their own size-dependent textures rebuild here.
     fn resize(&mut self, _gpu: &GpuCtx, _size: (u32, u32)) {}
+    /// The track changed (title, artist, album or cover). Called for every scene, on screen or
+    /// not, so one that shows the track has it ready when it comes on.
+    fn track(&mut self, _gpu: &GpuCtx, _track: &TrackInfo) {}
     /// Fills this frame's `P` uniform. Not called for scenes that aren't on screen.
     fn params(&mut self, _vis: &VisState, _settings: &SceneSettings, _p: &mut Params) {}
     /// Draws the scene into `f.target`.

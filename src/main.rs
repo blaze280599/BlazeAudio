@@ -407,10 +407,11 @@ impl App {
                     });
                 }
             }
-            if new_art {
-                if let Some(g) = &mut self.gfx {
+            if let Some(g) = &mut self.gfx {
+                if new_art {
                     self.ui.set_art(&g.egui_ctx, self.track.art.as_deref().map(|v| v.as_slice()));
                 }
+                g.gpu.set_track(&self.track);
             }
         }
         self.track.playback = self.media.playback();

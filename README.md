@@ -52,6 +52,7 @@ Recorded live while playing music; the colours come from the track's album art.
 | `2` | **Gradient ASCII** | A soft light seen through a grid of characters, which get denser where it's brighter. Four light shapes. The edge follows the spectrum, and beats send rings of scrambled characters outward. |
 | `3` | **Phosphor Scope** | A vector oscilloscope on curved CRT glass, tracing the live waveform with a glowing afterglow, as a classic sweep or wrapped around a circle. |
 | `4` | **Crystalized Ball** | A glass sphere ringed with crackling electric strands, full of glowing dust. Beats surge the rim, fire sparks and toss the dust like a snow globe, and the spectrum shapes the flares around the rim. |
+| `5` | **Picture Disc** | Late-night music TV. A CD printed with the album cover spins at the edge of the screen beside a "now playing." card with the cover, title, artist and album over a dotted spectrum meter, all through a VHS tape look. Beats speed up the spin and knock the picture about. |
 
 Switch with the number keys, `S` for the next scene, or the buttons in **Visuals**. **Auto-switch** can move on by itself on each new track or on a timer.
 
@@ -73,7 +74,7 @@ Switch with the number keys, `S` for the next scene, or the buttons in **Visuals
 |-----|--------|
 | `F1` / `Tab` | Show / hide the sidebar |
 | `F11` / `F` / `Alt+Enter` / double-click | Fullscreen |
-| `1` – `4` | Faulty Terminal / Gradient ASCII / Phosphor Scope / Crystalized Ball |
+| `1` – `5` | Faulty Terminal / Gradient ASCII / Phosphor Scope / Crystalized Ball / Picture Disc |
 | `S` | Next scene |
 | `Space` | Play / pause |
 | `N` / `P` | Next / previous track |

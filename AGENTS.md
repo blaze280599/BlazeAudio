@@ -17,7 +17,7 @@ BlazeAudio is a single-binary Windows music visualizer written in Rust.
 - It **controls the system output volume** through Core Audio.
 - It **updates itself** from this repo's GitHub releases. It's a portable exe, so the update replaces the exe in place.
 
-The current scenes are **Faulty Terminal** (CRT glyph spectrum), **Gradient ASCII** (a light seen through a glyph grid) **Phosphor Scope** (a vector oscilloscope with afterglow) and **Crystalized Ball** (an electric glass sphere full of instanced dust particles). More scenes are planned; the scene framework in `src/scenes/` exists for that reason.
+The current scenes are **Faulty Terminal** (CRT glyph spectrum), **Gradient ASCII** (a light seen through a glyph grid), **Phosphor Scope** (a vector oscilloscope with afterglow), **Crystalized Ball** (an electric glass sphere full of instanced dust particles) and **Picture Disc** (a spinning CD printed with the album cover beside a music-TV "now playing." card, through a VHS pass). More scenes are planned; the scene framework in `src/scenes/` exists for that reason.
 
 ### Hard constraints
 
@@ -27,7 +27,7 @@ These are product decisions. Don't change them without the user asking.
 |---|---|
 | Windows only | The `windows` crate, WASAPI, GSMTC and DX12 are used directly. No cross-platform abstractions or `cfg` gates for other OSes. |
 | DX12 only, FXC shader compiler | `make_instance()` in `main.rs` selects `Backends::DX12` and `Dx12Compiler::Fxc`. Shaders must compile under FXC (see Pitfalls §9). |
-| Portable, one self-contained `.exe` | No installer and no code signing. Static CRT (`.cargo/config.toml`), no runtime asset files. Shaders, fonts and icons are embedded (`include_str!`, `epaint_default_fonts`, painted icons). Don't add files the exe must load at runtime. |
+| Portable, one self-contained `.exe` | No installer and no code signing. Static CRT (`.cargo/config.toml`), no runtime asset files. Shaders, fonts and icons are embedded (`include_str!`, `epaint_default_fonts`, painted icons). Don't add files the exe must load at runtime. The one exception is Picture Disc reading fonts that ship with Windows (`arialbd.ttf`, then CJK fallbacks) on track changes, with the bundled font as a fallback. |
 | Very low idle cost | About 0.1% CPU idle and 0.6% playing, about 20 MB working set. Don't add per-frame allocations in hot paths, polling threads, or work that runs while silent or hidden. |
 | Network only for update checks | The one network use is `update.rs` asking GitHub for the latest release and downloading it, which the Updates setting can turn off. Metadata comes from the OS, not web APIs. Don't add other network calls, telemetry or HTTP crates (`update.rs` uses WinRT `HttpClient` from the `windows` crate). |
 | Single instance | A named mutex plus `FindWindowW` on the window class `BlazeAudio`. A second launch brings the first window to the front and exits. `--relaunch` (used by Restart now after an update) instead waits up to 5 s for the old copy to close. |
@@ -78,7 +78,7 @@ cargo run -- --snapshot snapshots    # headless self-test: PNGs + report.txt, no
 
 1. It synthesizes a 124 BPM track (kick, off-beat hats, snare, saw bass, pad).
 2. It feeds 8 s of it through the real analyzer (`audio::Offline`) and checks beat count and phase.
-3. It renders each scene offscreen at 1280×720 with a fixed 1/60 s step: `terminal.png`, `terminal_beat.png`, `ascii_{horizon,pinch,rise,eclipse,intro}.png`, `scope_{yt,polar}.png` and `ball{,_beat,_fall,_intro}.png`.
+3. It renders each scene offscreen at 1280×720 with a fixed 1/60 s step: `terminal.png`, `terminal_beat.png`, `ascii_{horizon,pinch,rise,eclipse,intro}.png`, `scope_{yt,polar}.png`, `ball{,_beat,_fall,_intro}.png` and `disc{,_intro,_long,_chrome,_empty}.png`.
 4. It writes `report.txt` (adapter, init time, ms/frame per scene, beats detected vs expected, BPM, beat phases) and `onset_trace.csv`.
 
 **The run is deterministic.** For a refactor or any change that shouldn't alter the visuals, build the old commit, snapshot into `before/`, build yours, snapshot into `after/`, and byte-compare the PNGs (`cmp`). They must be identical. For changes that are meant to alter the visuals, look at the PNGs; the Read tool can open images. Also check `report.txt`: beats should be about 21 over about 10.3 s with a BPM near 124, and phases should cluster near 0.0x.
@@ -109,7 +109,7 @@ Rules:
 ### 3.2 The frame loop (`App::frame` in `main.rs`)
 
 ```
-sync_media()                                             ← track/art changes, palette target, auto-switch on track
+sync_media()                                             ← track/art changes (UI art, gpu.set_track), palette target, auto-switch on track
 vis.update(audio.snapshot(), dt)                         ← smoothing, kick/hat envelopes, flow clock, palette crossfade
 need_ui? → egui_ctx.run(ui.draw(UiCtx{..}))              ← returns Vec<UiAction> + the scene rect
 gpu.set_viewport(scene rect) / set_render_scale
@@ -188,7 +188,7 @@ Each hop does the following:
 - The art is decoded to 256×256 RGBA, and `palette::extract` runs k-means in Oklab, scored for vividness and hue diversity, then pushed toward bright emissive colours.
 - Commands are queued, and a run of seeks collapses to the last one. `seek_hold` keeps the timeline at the requested position for up to 3 s, until the app reports it, so the timeline doesn't snap back.
 - `Playback::position_now()` extrapolates from the last reading while playing (Spotify reports position only on play, pause and seek).
-- The main thread detects changes through `versions()` and refreshes `track`, sets album art in the UI, picks the palette target, shows the toast, and runs scene auto-switch on a track change (but not for the first track seen).
+- The main thread detects changes through `versions()` and refreshes `track`, sets album art in the UI, hands the track to the scenes (`Gpu::set_track`), picks the palette target, shows the toast, and runs scene auto-switch on a track change (but not for the first track seen).
 
 ### 3.7 UI (`src/ui/`)
 
@@ -361,6 +361,7 @@ Variations:
 - **Size-dependent textures or feedback** (trails, afterglow, reaction-diffusion): take `size` in `new(gpu, size)`, rebuild in `resize()`, ping-pong two textures, and clear history when `f.fresh`. Use a compact format such as `R16Float` when you only need intensity. See `scope.rs`.
 - **Geometry instead of a full-screen pass**: build a custom `RenderPipeline` with `gpu.device` and `gpu.layout(..)`, and draw instanced quads from `A.wave` or `A.bands` in the vertex shader. Again, `scope.rs` (`vs_beam`) is the example.
 - **Per-instance data the vertex shader reads** (particle tables): group 1's shared layouts are fragment-only textures, so make your own bind group layout with `VERTEX` visibility (a read-only storage buffer works well) and a pipeline layout of `[&gpu.layouts.g0, &yours]`. See `ball.rs` (dust).
+- **Showing the track** (title, cover): override `Scene::track`, which `Gpu::set_track` calls on every scene, on screen or not, whenever the track or its art changes (never per frame). Upload the cover and rasterize text there, and skip the work when nothing it shows changed. See `disc.rs` (cover texture, text atlas with fallback fonts, two textures in group 1 through `gpu.layouts.tex2`).
 - **Constant tables too big for `Params`**: generate them as WGSL `var<private>` arrays in Rust and prepend them to the shader source before `gpu.module`. See `ball.rs` (`strand_tables`).
 - **Scene-specific analysis** (zero-crossing triggers, peak picking) belongs in the scene's `params()`, reading `vis.wave`, `vis.bands`, `vis.dt` and the other public fields. It doesn't belong in `VisState`. If it needs state between frames, keep it on the scene struct.
 
