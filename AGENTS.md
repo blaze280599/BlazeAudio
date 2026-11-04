@@ -93,7 +93,7 @@ Python on this machine may not have PIL, so compare files with `cmp` or a hash r
 
 | Thread | Owner | Produces | Consumed via |
 |---|---|---|---|
-| `audio-capture` | `audio.rs` `capture_loop` | `AudioFrame` (bands, waveform, beat count/strength, hat, energy, BPM, level) | `AudioEngine::snapshot()` clones it out of a `Mutex` |
+| `audio-capture` | `audio.rs` `capture_loop` | `AudioFrame` (bands, waveform, beat count/strength, hat, energy, BPM, level); the device name and whether capture runs, plus a version counter | `AudioEngine::snapshot()` clones the frame out of a `Mutex`; `device_version()` / `device()` |
 | `media-session` | `media.rs` `watch_loop` | `TrackInfo` (title, artist, album, art RGBA, palette, `Playback`) plus `track_version` / `art_version` counters | `MediaWatcher::snapshot()`, `versions()`, `playback()`; commands in through an `mpsc` channel |
 | `volume` | `volume.rs` | Level and mute as atomics | `Volume::level()` / `muted()`; changes go out through a channel |
 | `update` | `update.rs` `worker` | `update::Status` plus a `version` counter | `Updater::version()` / `status()`; `UpdateCmd::{Check, Install}` in through a channel |

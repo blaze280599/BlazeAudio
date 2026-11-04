@@ -4,7 +4,7 @@
 //! so band smoothing and beat detection are independent of the render frame rate, and when
 //! nothing is playing WASAPI stops delivering packets and the analysis costs nothing.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -65,8 +65,21 @@ impl Default for AudioFrame {
 struct Shared {
     frame: Mutex<AudioFrame>,
     params: Mutex<AudioParams>,
-    device: Mutex<String>,
+    /// The output device's name, and whether loopback capture is running on it.
+    device: Mutex<(String, bool)>,
+    /// Bumped whenever `device` changes, so the main thread copies it only then.
+    device_ver: AtomicU64,
     stop: AtomicBool,
+}
+
+impl Shared {
+    fn set_device(&self, name: String, capturing: bool) {
+        let Ok(mut d) = self.device.lock() else { return };
+        if d.0 != name || d.1 != capturing {
+            *d = (name, capturing);
+            self.device_ver.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 pub struct AudioEngine {
@@ -78,7 +91,8 @@ impl AudioEngine {
         let shared = Arc::new(Shared {
             frame: Mutex::new(AudioFrame::default()),
             params: Mutex::new(params),
-            device: Mutex::new(String::from("(no device)")),
+            device: Mutex::new((String::from("(no device)"), false)),
+            device_ver: AtomicU64::new(1),
             stop: AtomicBool::new(false),
         });
         let s = shared.clone();
@@ -98,8 +112,14 @@ impl AudioEngine {
         *self.shared.params.lock().unwrap() = p;
     }
 
-    pub fn device_name(&self) -> String {
-        self.shared.device.lock().unwrap().clone()
+    /// Changes whenever the device or its capture state does; compare before calling `device()`.
+    pub fn device_version(&self) -> u64 {
+        self.shared.device_ver.load(Ordering::Relaxed)
+    }
+
+    /// The output device's name, and whether loopback capture is running on it.
+    pub fn device(&self) -> (String, bool) {
+        self.shared.device.lock().map(|d| d.clone()).unwrap_or_default()
     }
 }
 
@@ -113,7 +133,7 @@ fn capture_loop(shared: Arc<Shared>) {
     let host = cpal::default_host();
     while !shared.stop.load(Ordering::Relaxed) {
         let Some(device) = host.default_output_device() else {
-            *shared.device.lock().unwrap() = "(no output device)".into();
+            shared.set_device("(no output device)".into(), false);
             std::thread::sleep(Duration::from_secs(2));
             continue;
         };
@@ -187,7 +207,7 @@ fn capture_loop(shared: Arc<Shared>) {
                 )
             }
             _ => {
-                *shared.device.lock().unwrap() = format!("{name} (unsupported format)");
+                shared.set_device(format!("{name} (unsupported format)"), false);
                 std::thread::sleep(Duration::from_secs(3));
                 continue;
             }
@@ -203,7 +223,7 @@ fn capture_loop(shared: Arc<Shared>) {
             std::thread::sleep(Duration::from_secs(2));
             continue;
         }
-        *shared.device.lock().unwrap() = name;
+        shared.set_device(name, true);
 
         // Supervise: rebuild on stream error or when the default output device changes.
         let mut ticks = 0u32;
@@ -633,7 +653,8 @@ impl Offline {
         let shared = Arc::new(Shared {
             frame: Mutex::new(AudioFrame::default()),
             params: Mutex::new(params),
-            device: Mutex::new(String::new()),
+            device: Mutex::new((String::new(), false)),
+            device_ver: AtomicU64::new(0),
             stop: AtomicBool::new(false),
         });
         Self { an: Analyzer::new(sample_rate, 1, shared) }

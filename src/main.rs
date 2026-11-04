@@ -168,6 +168,10 @@ struct App {
     /// Seconds the current scene has been on screen with music playing (for the scene timer).
     scene_clock: f32,
 
+    /// The audio device's name and whether capture runs on it, as of `device_ver`.
+    device: (String, bool),
+    device_ver: u64,
+
     stats: sys::ProcStats,
     trim_at: Option<Instant>,
     last_mouse_move: Instant,
@@ -217,6 +221,8 @@ impl App {
             volume_flash: 0.0,
             seek_flash: 0.0,
             scene_clock: 0.0,
+            device: (String::new(), false),
+            device_ver: 0,
             stats: sys::ProcStats::new(),
             trim_at: Some(now + Duration::from_secs(4)),
             last_mouse_move: now,
@@ -433,6 +439,10 @@ impl App {
         self.sync_media();
         g = self.gfx.take().unwrap();
 
+        if self.audio.device_version() != self.device_ver {
+            self.device_ver = self.audio.device_version();
+            self.device = self.audio.device();
+        }
         if self.updater.version() != self.update_ver {
             self.update_ver = self.updater.version();
             self.update = self.updater.status();
@@ -469,7 +479,6 @@ impl App {
         self.scene_px = [0.0, 0.0, sw, sh];
         if need_ui {
             let raw = g.egui_state.take_egui_input(&g.window);
-            let device_name = self.audio.device_name();
             let palette = self.vis.pal_target;
             let mut scene_rect = egui::Rect::NOTHING;
             let out = g.egui_ctx.run(raw, |ctx| {
@@ -485,7 +494,7 @@ impl App {
                         fps: self.fps,
                         frame_ms: self.frame_ms,
                         idle: self.idle,
-                        device: &device_name,
+                        device: &self.device.0,
                         adapter: &g.gpu.adapter_name,
                         show_sidebar: self.show_sidebar,
                         toast_alpha,
