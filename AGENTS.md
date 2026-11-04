@@ -27,7 +27,7 @@ These are product decisions. Don't change them without the user asking.
 |---|---|
 | Windows only | The `windows` crate, WASAPI, GSMTC and DX12 are used directly. No cross-platform abstractions or `cfg` gates for other OSes. |
 | DX12 only, FXC shader compiler | `make_instance()` in `main.rs` selects `Backends::DX12` and `Dx12Compiler::Fxc`. Shaders must compile under FXC (see Pitfalls §9). |
-| Portable, one self-contained `.exe` | No installer and no code signing. Static CRT (`.cargo/config.toml`), no runtime asset files. Shaders, fonts and icons are embedded (`include_str!`, `epaint_default_fonts`, painted icons). Don't add files the exe must load at runtime. The one exception is Picture Disc reading fonts that ship with Windows (Arial regular, italic and bold, then CJK fallbacks) on track changes, with the bundled font as a fallback. |
+| Portable, one self-contained `.exe` | No installer and no code signing. Static CRT (`.cargo/config.toml`), no runtime asset files. Shaders, fonts and icons are embedded (`include_str!`, `epaint_default_fonts`, painted icons). The exe's icon and version info are Windows resources that `build.rs` renders and writes as a `.res` file for the linker, with no SDK resource compiler; `set_icons` in `main.rs` loads the title-bar and taskbar icons from that resource (icon group 1). Don't add files the exe must load at runtime. The one exception is Picture Disc reading fonts that ship with Windows (Arial regular, italic and bold, then CJK fallbacks) on track changes, with the bundled font as a fallback. |
 | Very low idle cost | About 0.1% CPU idle and 0.6% playing, about 20 MB working set. Don't add per-frame allocations in hot paths, polling threads, or work that runs while silent or hidden. |
 | Network only for update checks | The one network use is `update.rs` asking GitHub for the latest release and downloading it, which the Updates setting can turn off. Metadata comes from the OS, not web APIs. Don't add other network calls, telemetry or HTTP crates (`update.rs` uses WinRT `HttpClient` from the `windows` crate). |
 | Single instance | A named mutex plus `FindWindowW` on the window class `BlazeAudio`. A second launch brings the first window to the front and exits. `--relaunch` (used by Restart now after an update) instead waits up to 5 s for the old copy to close. |
@@ -251,7 +251,7 @@ Match the surrounding code; it's consistent.
   - Optional OS features degrade silently (`let _ =`, `.ok()`, `Option` chains).
   - `expect()` is reserved for true invariants (bundled font, thread spawn).
   - There's no `anyhow` or `thiserror`. Don't add them.
-- **Dependencies**: keep the list short, and add `default-features = false` where possible. Prefer the existing crates (`windows`, `wgpu`, `egui`, `cpal`, `realfft`, `image`, `serde_json`, `bytemuck`, `ab_glyph`). Adding a crate is a product decision (binary size, build time), so ask first.
+- **Dependencies**: keep the list short, and add `default-features = false` where possible. Prefer the existing crates (`windows`, `wgpu`, `egui`, `cpal`, `realfft`, `image`, `serde_json`, `bytemuck`, `ab_glyph`). `image` (PNG only) is also the one build dependency, for the 256 px exe icon. Adding a crate is a product decision (binary size, build time), so ask first.
 - **Unsafe**: only around Win32/COM calls, kept local and small.
 - **GPU structs**: `#[repr(C)]`, `#[derive(Clone, Copy, Pod, Zeroable)]`, f32 fields, explicit `_pad` fields, and size a multiple of 16. Each one has a "Must match … in <file>.wgsl" doc line.
 - **Frame-rate independence**: smoothing uses `1 - exp(-dt / tau)`, never fixed per-frame factors. `dt` is clamped to 0.1 s.
@@ -439,7 +439,7 @@ Keep the capture callback cheap: no allocation or locking beyond the existing pe
 
 ### 5.8 Cut a release
 
-1. Bump `version` in `Cargo.toml` (semver; the updater compares `major.minor.patch`), then `cargo build` so `Cargo.lock` follows, and commit both.
+1. Bump `version` in `Cargo.toml` (semver; the updater compares `major.minor.patch`), then `cargo build` so `Cargo.lock` follows, and commit both. The exe's version info (Properties → Details) follows the same version through `build.rs`.
 2. Tag and push: `git tag v1.2.0 && git push origin main v1.2.0`. The tag must be the version with a `v` in front; the workflow refuses a mismatch.
 3. `.github/workflows/release.yml` runs the tests, builds the release exe, writes `blazeaudio.exe.sha256`, and publishes a release with both files and generated notes. Every running copy set to Notify or Auto sees it on its next launch.
 4. Don't mark a release you want installed as a prerelease: `releases/latest` skips prereleases.
@@ -495,6 +495,7 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 | Change the sidebar or drawer | `src/ui/sidebar.rs`, `src/ui/drawer.rs` |
 | Change UI colours or the egui style | `src/ui/theme.rs` |
 | Change the self-test | `src/snapshot.rs` |
+| Change the exe icon or its version info | `build.rs` (`icon_rgba`, `version_info`) |
 
 ---
 

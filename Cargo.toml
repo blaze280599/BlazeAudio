@@ -48,6 +48,10 @@ features = [
     "Web_Http_Headers",
 ]
 
+# build.rs renders the exe icon; only its 256 px image is PNG-compressed.
+[build-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [profile.release]
 opt-level = 3
 lto = "fat"

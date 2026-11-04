@@ -101,25 +101,16 @@ fn already_running(wait: bool) -> bool {
     }
 }
 
-fn app_icon() -> Option<Icon> {
-    const N: u32 = 64;
-    let mut px = Vec::with_capacity((N * N * 4) as usize);
-    for y in 0..N {
-        for x in 0..N {
-            let dx = x as f32 - 31.5;
-            let dy = y as f32 - 31.5;
-            let r = (dx * dx + dy * dy).sqrt() / 31.5;
-            let a = dy.atan2(dx) / std::f32::consts::TAU + 0.5;
-            let ring = (1.0 - ((r - 0.72).abs() / 0.16)).clamp(0.0, 1.0);
-            let core = (1.0 - r / 0.4).clamp(0.0, 1.0);
-            let bar = if ((a * 24.0).fract() - 0.5).abs() < 0.25 && r > 0.5 && r < 0.95 { 1.0 } else { 0.0 };
-            let v = (ring.powf(0.6) + bar * 0.6 + core * 0.8).min(1.0);
-            let t = a;
-            let (cr, cg, cb) = (1.0 - t * 0.9, 0.25 + t * 0.5, 0.6 + t * 0.4);
-            px.extend_from_slice(&[(cr * v * 255.0) as u8, (cg * v * 255.0) as u8, (cb * v * 255.0) as u8, (v * 255.0) as u8]);
-        }
-    }
-    Icon::from_rgba(px, N, N).ok()
+/// Sets the title-bar and taskbar icons from the exe's icon resource (see build.rs) at the
+/// window's DPI; Windows picks the closest size in the icon group.
+fn set_icons(w: &Window) {
+    use winit::platform::windows::{IconExtWindows, WindowExtWindows};
+    let icon = |pt: f64| {
+        let n = (pt * w.scale_factor()).round() as u32;
+        Icon::from_resource(1, Some(PhysicalSize::new(n, n))).ok()
+    };
+    w.set_window_icon(icon(16.0));
+    w.set_taskbar_icon(icon(32.0));
 }
 
 struct Gfx {
@@ -650,8 +641,6 @@ impl ApplicationHandler for App {
             .with_title("BlazeAudio")
             .with_inner_size(LogicalSize::new(1280.0, 720.0))
             .with_min_inner_size(LogicalSize::new(320.0, 200.0))
-            .with_window_icon(app_icon())
-            .with_taskbar_icon(app_icon())
             .with_class_name(WINDOW_CLASS);
         // Reopen where it was, as long as its title bar is still on a connected monitor.
         if let Some(gm) = self.settings.window {
@@ -675,6 +664,7 @@ impl ApplicationHandler for App {
                 return;
             }
         };
+        set_icons(&window);
         let surface = match self.instance.create_surface(window.clone()) {
             Ok(s) => s,
             Err(e) => {
@@ -741,6 +731,11 @@ impl ApplicationHandler for App {
                 if let Some(g) = &mut self.gfx {
                     g.gpu.resize(size.width, size.height);
                     g.window.request_redraw();
+                }
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Some(g) = &self.gfx {
+                    set_icons(&g.window);
                 }
             }
             WindowEvent::Occluded(o) => {
