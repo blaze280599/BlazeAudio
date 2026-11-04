@@ -57,7 +57,7 @@ impl VisState {
     }
 
     pub fn update(&mut self, f: &AudioFrame, dt: f32, now: Instant) {
-        let stale = f.updated.map_or(true, |t| now.duration_since(t).as_secs_f32() > 0.15);
+        let stale = f.updated.is_none_or(|t| now.duration_since(t).as_secs_f32() > 0.15);
         let k = |tau: f32| 1.0 - (-dt / tau).exp();
 
         // Light display smoothing on top of the analyzer's attack/decay; when the capture
@@ -136,8 +136,8 @@ impl VisState {
     pub fn globals(&self, s: &Settings, res: (u32, u32), time: f32) -> Globals {
         let (w, h) = (res.0 as f32, res.1 as f32);
         let mut pal = [[0.0f32; 4]; 4];
-        for i in 0..4 {
-            pal[i] = [self.pal_cur[i][0], self.pal_cur[i][1], self.pal_cur[i][2], 1.0];
+        for (dst, c) in pal.iter_mut().zip(&self.pal_cur) {
+            *dst = [c[0], c[1], c[2], 1.0];
         }
         Globals {
             res: [w, h],

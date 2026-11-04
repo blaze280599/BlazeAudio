@@ -54,8 +54,7 @@ impl ProcStats {
         self.last_cpu = cpu;
         self.last_wall = Instant::now();
         unsafe {
-            let mut pmc = PROCESS_MEMORY_COUNTERS_EX::default();
-            pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+            let mut pmc = PROCESS_MEMORY_COUNTERS_EX { cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32, ..Default::default() };
             if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc as *mut _ as *mut PROCESS_MEMORY_COUNTERS, pmc.cb).as_bool() {
                 self.working_set_mb = pmc.WorkingSetSize as f32 / (1024.0 * 1024.0);
                 self.private_mb = pmc.PrivateUsage as f32 / (1024.0 * 1024.0);

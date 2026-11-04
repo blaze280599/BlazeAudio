@@ -51,7 +51,7 @@ cargo test                           # unit tests (currently settings migration)
 ```
 
 ```bash
-cargo clippy --all-targets           # the tree has ~40 pre-existing warnings; add none in code you touch
+cargo clippy --all-targets           # the tree is warning-free; CI fails on any warning
 ```
 
 ```bash
@@ -81,7 +81,7 @@ cargo run -- --snapshot snapshots    # headless self-test: PNGs + report.txt, no
 3. It renders each scene offscreen at 1280×720 with a fixed 1/60 s step: `terminal.png`, `terminal_beat.png`, `ascii_{horizon,pinch,rise,eclipse,intro}.png`, `scope_{yt,polar}.png`, `ball{,_beat,_fall,_intro}.png` and `disc{,_intro,_long,_chrome,_empty}.png`.
 4. It writes `report.txt` (adapter, init time, ms/frame per scene, beats detected vs expected, BPM, beat phases) and `onset_trace.csv`.
 
-**The run is deterministic.** For a refactor or any change that shouldn't alter the visuals, build the old commit, snapshot into `before/`, build yours, snapshot into `after/`, and byte-compare the PNGs (`cmp`). They must be identical. For changes that are meant to alter the visuals, look at the PNGs; the Read tool can open images. Also check `report.txt`: beats should be about 21 over about 10.3 s with a BPM near 124, and phases should cluster near 0.0x.
+**The run is deterministic.** For a refactor or any change that shouldn't alter the visuals, build the old commit, snapshot into `before/`, build yours, snapshot into `after/`, and byte-compare the PNGs (`cmp`). They must be identical. For changes that are meant to alter the visuals, look at the PNGs; the Read tool can open images. Also check `report.txt`: beats should be about 40 over about 19.8 s (the report gives the expected count) with a BPM near 124, and most phases should cluster near 0.0x.
 
 Python on this machine may not have PIL, so compare files with `cmp` or a hash rather than an image library.
 
@@ -382,7 +382,7 @@ From those, everything else updates automatically: sidebar buttons, number keys 
 
 **5. Docs** – in `README.md`, add the scene to the scene list and the `1` / `2` / `3` row of the Controls table. Update §1 of this file (the list of current scenes). The README's scene gallery uses animated WebP clips in `docs/media/` (about 4.5 s, 800 px wide, 2 MB or less), recorded from the running app with ffmpeg's `ddagrab`; add one for the new scene.
 
-**6. Verify** – `cargo clippy --all-targets` (no new warnings in your files), `cargo test`, then the snapshot. Look at the new PNGs, and byte-compare the existing ones against the previous build; they must not change. Check the ms/frame for the new scene: about 1.2 ms at 1280×720 is typical, and much more than that needs a reason.
+**6. Verify** – `cargo clippy --all-targets` (no warnings), `cargo test`, then the snapshot. Look at the new PNGs, and byte-compare the existing ones against the previous build; they must not change. Check the ms/frame for the new scene: about 1.2 ms at 1280×720 is typical, and much more than that needs a reason.
 
 **Shader quality bar** – scenes run at up to 170 Hz at 1440p on the user's machine, and on weaker GPUs at lower `render_scale`.
 
@@ -448,7 +448,7 @@ Keep the capture callback cheap: no allocation or locking beyond the existing pe
 
 ## 6. Verification checklist (before saying "done")
 
-1. `cargo check` and `cargo clippy --all-targets`: nothing new in the files you touched.
+1. `cargo check` and `cargo clippy --all-targets`: no warnings. `.github/workflows/ci.yml` runs clippy with `-D warnings` and the tests on every push to `main` and every pull request.
 2. `cargo test` passes. Add tests for pure logic you introduce, such as settings migration or maths helpers.
 3. `cargo run -- --snapshot <dir>` succeeds. For changes that shouldn't affect the visuals, the PNGs are byte-identical to the previous build. For visual changes, you've looked at the PNGs. Frame times and beat stats are in line.
 4. For UI, window-mode or input changes, the snapshot can't see them. Launch the app with a scratch `APPDATA`, confirm it starts and closes cleanly, and tell the user exactly what you couldn't check by eye, so they can click through it.

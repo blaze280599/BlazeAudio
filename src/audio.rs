@@ -215,7 +215,7 @@ fn capture_loop(shared: Arc<Shared>) {
                 break;
             }
             ticks += 1;
-            if ticks % 4 == 0 {
+            if ticks.is_multiple_of(4) {
                 let current = host.default_output_device().and_then(|d| d.id().ok());
                 if current != dev_id {
                     #[cfg(debug_assertions)]
@@ -462,7 +462,7 @@ impl Analyzer {
         // ---- Log-spaced bands with AGC ----
         let mut db = [0.0f32; NUM_BANDS];
         let mut max_db = -200.0f32;
-        for b in 0..NUM_BANDS {
+        for (b, out) in db.iter_mut().enumerate() {
             let (lo, hi) = self.band_bins[b];
             let m = if hi - lo < 1.0 {
                 self.mag_at((lo + hi) * 0.5)
@@ -474,9 +474,8 @@ impl Analyzer {
                 }
                 mx
             };
-            let d = 20.0 * (m + 1e-9).log10() + self.band_tilt[b];
-            db[b] = d;
-            max_db = max_db.max(d);
+            *out = 20.0 * (m + 1e-9).log10() + self.band_tilt[b];
+            max_db = max_db.max(*out);
         }
         // Fast-up / slow-down automatic gain so quiet and loud tracks both fill the screen.
         if max_db > self.agc_db {
@@ -493,9 +492,9 @@ impl Analyzer {
         let kd = 1.0 - (-dt / (p.decay_ms.max(1.0) * 0.001)).exp();
         let mut cls_sum = [0.0f32; 3];
         let mut cls_n = [0.0f32; 3];
-        for b in 0..NUM_BANDS {
+        for (b, &d) in db.iter().enumerate() {
             let target = if gate {
-                ((db[b] - (top - range)) / range).clamp(0.0, 1.0).powf(1.5)
+                ((d - (top - range)) / range).clamp(0.0, 1.0).powf(1.5)
             } else {
                 0.0
             };

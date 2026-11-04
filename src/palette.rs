@@ -41,6 +41,8 @@ pub fn luminance(c: Rgb) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
+/// Ottosson's Oklab transform; the coefficients are kept exactly as published.
+#[allow(clippy::excessive_precision)]
 pub fn linear_to_oklab(c: Rgb) -> Rgb {
     let l = 0.4122214708 * c[0] + 0.5363325363 * c[1] + 0.0514459929 * c[2];
     let m = 0.2119034982 * c[0] + 0.6806995451 * c[1] + 0.1073969566 * c[2];
@@ -53,6 +55,8 @@ pub fn linear_to_oklab(c: Rgb) -> Rgb {
     ]
 }
 
+/// The inverse of `linear_to_oklab`, coefficients as published.
+#[allow(clippy::excessive_precision)]
 pub fn oklab_to_linear(c: Rgb) -> Rgb {
     let l = c[0] + 0.3963377774 * c[1] + 0.2158037573 * c[2];
     let m = c[0] - 0.1055613458 * c[1] - 0.0638541728 * c[2];
