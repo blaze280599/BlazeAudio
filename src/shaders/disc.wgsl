@@ -24,8 +24,6 @@ struct Params {
 
 const ROW_H: f32 = 128.0;
 const ATLAS: vec2f = vec2f(2048.0, 640.0);
-// Baseline within a row (100 / 128).
-const BASE: f32 = 0.78125;
 // The card, in card units (it scales with the room beside the disc).
 const CARD: vec2f = vec2f(0.95, 0.56);
 const DISC_X: f32 = -0.01;
@@ -65,12 +63,11 @@ fn row_cov(row: f32, l: vec2f, w: f32, lod: f32) -> f32 {
   return textureSampleLevel(t1, samp_clamp, uv, lod).r;
 }
 
-// Row `row` drawn with its top-left at `o` and height `h` (card units, card scale `s`), slanted
-// by `slant`. Returns coverage and a soft drop shadow.
-fn text(b: vec2f, o: vec2f, h: f32, row: f32, w: f32, slant: f32, s: f32) -> vec2f {
-  var l = (b - o) / h;
+// Row `row` drawn with its top-left at `o` and height `h` (card units, card scale `s`). Returns
+// coverage and a soft drop shadow.
+fn text(b: vec2f, o: vec2f, h: f32, row: f32, w: f32, s: f32) -> vec2f {
+  let l = (b - o) / h;
   if (l.y < -0.2 || l.y > 1.3 || l.x < -0.4 || l.x > w + 0.4) { return vec2f(0.0); }
-  l.x -= (BASE - l.y) * slant;
   let lod = clamp(log2(ROW_H / max(h * s * G.res.y, 1.0)), 0.0, 5.0);
   let cov = row_cov(row, l, w, lod);
   let sh = row_cov(row, l - vec2f(0.04, 0.06), w, min(lod + 1.5, 5.0));
@@ -217,10 +214,10 @@ fn card(p: vec2f, col_in: vec3f, o: vec2f, s: f32) -> vec3f {
     col = mix(col, art(clamp(q, vec2f(0.0), vec2f(1.0))) * 1.05, ex * ey * gap * fade);
   }
 
-  let np = text(b, vec2f(0.0, 0.0), 0.15, 0.0, P.widths.x, 0.0, s);
-  let t1 = text(b, vec2f(0.235, 0.165), 0.092, 1.0, P.widths.y, 0.2, s);
-  let t2 = text(b, vec2f(0.235, 0.235), 0.092, 2.0, P.widths.z, 0.2, s);
-  let t3 = text(b, vec2f(0.235, 0.305), 0.07, 3.0, P.widths.w, 0.2, s);
+  let np = text(b, vec2f(0.0, 0.0), 0.15, 0.0, P.widths.x, s);
+  let t1 = text(b, vec2f(0.235, 0.165), 0.092, 1.0, P.widths.y, s);
+  let t2 = text(b, vec2f(0.235, 0.235), 0.092, 2.0, P.widths.z, s);
+  let t3 = text(b, vec2f(0.235, 0.305), 0.07, 3.0, P.widths.w, s);
   let cov = max(max(np.x, t1.x), max(t2.x, t3.x));
   let sh = max(max(np.y, t1.y), max(t2.y, t3.y));
   col *= 1.0 - 0.7 * sh * fade;

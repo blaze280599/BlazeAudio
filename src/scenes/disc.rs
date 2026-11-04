@@ -46,6 +46,15 @@ enum Row {
 }
 
 impl Row {
+    /// After the reference: a plain "now playing.", italic track lines and a heavy ghost word.
+    fn style(self) -> Style {
+        match self {
+            Row::NowPlaying => Style::Regular,
+            Row::Title | Row::Artist | Row::Album => Style::Italic,
+            Row::Ghost => Style::Bold,
+        }
+    }
+
     /// Longest line the card has room for, in atlas pixels; longer text ends in "...".
     fn max_width(self) -> f32 {
         match self {
@@ -56,9 +65,28 @@ impl Row {
     }
 }
 
-/// Windows fonts for the card, in order of preference: Arial Bold for the look, then fonts for
-/// Japanese, Korean and Chinese titles. Each is read only when a line needs it.
-const SYSTEM_FONTS: [&str; 5] = ["arialbd.ttf", "segoeuib.ttf", "YuGothB.ttc", "malgunbd.ttf", "msyhbd.ttc"];
+/// Weight and style of an atlas row.
+#[derive(Clone, Copy, PartialEq)]
+enum Style {
+    Regular,
+    Italic,
+    Bold,
+}
+
+impl Style {
+    /// Windows fonts in order of preference: Arial for the look, then fonts for Japanese, Korean
+    /// and Chinese titles. Each is read only when a line needs it.
+    fn system_fonts(self) -> [&'static str; 5] {
+        match self {
+            Style::Regular => ["arial.ttf", "segoeui.ttf", "YuGothR.ttc", "malgun.ttf", "msyh.ttc"],
+            Style::Italic => ["ariali.ttf", "segoeui.ttf", "YuGothR.ttc", "malgun.ttf", "msyh.ttc"],
+            Style::Bold => ["arialbd.ttf", "segoeuib.ttf", "YuGothB.ttc", "malgunbd.ttf", "msyhbd.ttc"],
+        }
+    }
+}
+
+/// Slant drawn into italic lines set in a fallback font with no italic, matching Arial Italic.
+const FAUX_SLANT: f32 = 0.21;
 
 /// What's printed on the disc (order matches the shader).
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -234,10 +262,11 @@ impl PictureDisc {
             (Row::Album, lines[2].as_str()),
             (Row::Ghost, ghost.as_str()),
         ];
-        let mut fonts = Fonts::default();
+        let mut fonts = [Fonts::new(Style::Regular), Fonts::new(Style::Italic), Fonts::new(Style::Bold)];
         let mut px = vec![0u8; (ATLAS_W * ATLAS_H) as usize];
         for (row, text) in rows {
-            let (glyphs, end) = fit(&mut fonts, text, row.max_width());
+            let fonts = &mut fonts[row.style() as usize];
+            let (glyphs, end) = fit(fonts, text, row.max_width());
             fonts.draw(&glyphs, &mut px, row as u32);
             self.widths[row as usize] = if glyphs.is_empty() { 0.0 } else { (end + PAD) / ROW_H as f32 };
         }
@@ -351,30 +380,43 @@ fn upload_art(queue: &wgpu::Queue, tex: &wgpu::Texture, rgba: &[u8]) {
     }
 }
 
-/// The fonts loaded so far for one rasterization; see `SYSTEM_FONTS`. Dropped afterwards, so
-/// the large CJK fonts don't stay in memory.
-#[derive(Default)]
+/// The fonts of one style loaded so far for one rasterization; see `Style::system_fonts`.
+/// Dropped afterwards, so the large CJK fonts don't stay in memory.
 struct Fonts {
+    style: Style,
     loaded: Vec<FontArc>,
-    /// Next entry of `SYSTEM_FONTS` to try; one past the end means the bundled font is next.
+    /// Slant to draw each loaded font with (`FAUX_SLANT` for italic lines in an upright font).
+    slant: Vec<f32>,
+    /// Next system font to try; one past the end means the bundled font is next.
     next: usize,
 }
 
 impl Fonts {
+    fn new(style: Style) -> Self {
+        Self { style, loaded: Vec::new(), slant: Vec::new(), next: 0 }
+    }
+
     /// Loads the next font in line, or returns false when there are none left.
     fn load_next(&mut self) -> bool {
         let dir = std::env::var_os("WINDIR").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from).join("Fonts");
-        while let Some(name) = SYSTEM_FONTS.get(self.next) {
+        let names = self.style.system_fonts();
+        // Only the first italic choice (Arial Italic) is a real italic.
+        let faux = |next: usize| if self.style == Style::Italic && next > 0 { FAUX_SLANT } else { 0.0 };
+        while let Some(name) = names.get(self.next) {
+            let slant = faux(self.next);
             self.next += 1;
             if let Some(f) = std::fs::read(dir.join(name)).ok().and_then(|d| FontVec::try_from_vec_and_index(d, 0).ok()) {
                 self.loaded.push(FontArc::new(f));
+                self.slant.push(slant);
                 return true;
             }
         }
-        if self.next == SYSTEM_FONTS.len() {
+        if self.next == names.len() {
+            let slant = faux(self.next);
             self.next += 1;
             if let Ok(f) = FontArc::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT) {
                 self.loaded.push(f);
+                self.slant.push(slant);
                 return true;
             }
         }
@@ -396,12 +438,13 @@ impl Fonts {
     /// Draws `glyphs` into atlas row `row` of `px`, clipped to the row.
     fn draw(&self, glyphs: &[Glyph], px: &mut [u8], row: u32) {
         for g in glyphs {
-            let f = &self.loaded[g.font];
+            let (f, slant) = (&self.loaded[g.font], self.slant[g.font]);
             let glyph = g.id.with_scale_and_position(scale(f), ab_glyph::point(g.x, BASELINE));
             let Some(o) = f.outline_glyph(glyph) else { continue };
             let b = o.px_bounds();
             o.draw(|gx, gy, c| {
-                let (x, y) = (b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32);
+                let y = b.min.y as i32 + gy as i32;
+                let x = b.min.x as i32 + gx as i32 + ((BASELINE - y as f32) * slant).round() as i32;
                 if x >= 0 && y >= 0 && (x as u32) < ATLAS_W && (y as u32) < ROW_H {
                     let p = &mut px[((row * ROW_H + y as u32) * ATLAS_W + x as u32) as usize];
                     *p = (*p).max((c.clamp(0.0, 1.0) * 255.0) as u8);
@@ -494,7 +537,7 @@ mod tests {
 
     #[test]
     fn long_lines_are_cut_with_an_ellipsis() {
-        let mut fonts = Fonts::default();
+        let mut fonts = Fonts::new(Style::Italic);
         let (_, short) = fit(&mut fonts, "short", 1100.0);
         let (glyphs, long) = fit(&mut fonts, &"very long title ".repeat(20), 1100.0);
         assert!(short < 1100.0 && long + PAD <= 1100.0 && long > 800.0);
