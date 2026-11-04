@@ -128,7 +128,7 @@ schedule(): ControlFlow::Wait + request_redraw | WaitUntil(idle period) | Wait w
 
 Key facts:
 
-- **egui only runs when something is visible**: the sidebar, toast, stats, on-scene controls, the volume bar or the timeline. The `need_ui` expression lists them. Anything new that draws over the scene must be added there and to `idle`, or it will freeze or vanish.
+- **egui only runs when something is visible**: the sidebar, toast, "nothing playing" hint, stats, on-scene controls, the volume bar or the timeline. The `need_ui` expression lists them. Anything new that draws over the scene must be added there and to `idle`, or it will freeze or vanish.
 - **The UI runs before rendering** because the docked sidebar decides the scene viewport. Scene targets are sized to the viewport times `render_scale`. When that size changes, `Gpu::rebuild_targets` rebuilds the bloom chain and calls `Scene::resize` on every scene.
 - **Frame pacing**: when active, vsync (`AutoVsync`) paces frames through `request_redraw`. When idle, `WaitUntil(last_frame + 1/idle_fps)`. When minimized or occluded, it waits with no timer; `Resized` / `Occluded(false)` request the next frame.
 - **Settings save points**: the drawer closing, the sidebar being hidden, Esc closing the drawer, `CloseRequested` (which also calls `remember_window()`), and `exiting`. Saving is atomic: write `.json.tmp`, then rename.
@@ -206,7 +206,7 @@ The UI is **egui**, in immediate mode, redrawn every frame it runs.
 | `playback.rs` | `seek_bar` (sidebar click-to-jump, or on-scene drag/scroll scrubbing), `time_bubble`, `transport`, `fmt_time` |
 | `sidebar.rs` | Logo, section list, collapse/hide, now-playing card (art, title, seek bar, transport, spectrum) |
 | `drawer.rs` | Drawer shell, Visuals footer (Randomize / Undo / Reset, undo depth 32), and one function per section: `visuals`, `audio`, `palette`, `general` (method; owns the reset confirm), `hotkeys`; also `palette_row`, `key_row`, `theme_card` |
-| `overlay.rs` | `stats_hud`, `toast`, `window_buttons`, `volume_bar` (uses `wake::WakeSlider`), `timeline` |
+| `overlay.rs` | `stats_hud`, `toast`, `empty_hint` ("Nothing playing" / "No output device" in the toast's place), `window_buttons`, `volume_bar` (uses `wake::WakeSlider`), `timeline` |
 
 UI conventions:
 

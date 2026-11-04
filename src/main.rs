@@ -171,6 +171,8 @@ struct App {
     /// The audio device's name and whether capture runs on it, as of `device_ver`.
     device: (String, bool),
     device_ver: u64,
+    /// Opacity of the "nothing playing" hint, eased toward its target.
+    hint_alpha: f32,
 
     stats: sys::ProcStats,
     trim_at: Option<Instant>,
@@ -223,6 +225,7 @@ impl App {
             scene_clock: 0.0,
             device: (String::new(), false),
             device_ver: 0,
+            hint_alpha: 0.0,
             stats: sys::ProcStats::new(),
             trim_at: Some(now + Duration::from_secs(4)),
             last_mouse_move: now,
@@ -466,7 +469,16 @@ impl App {
         let volume_alpha = if self.settings.show_volume { controls_alpha.max((self.volume_flash / 0.4).min(1.0)) } else { 0.0 };
         let has_timeline = self.settings.show_timeline && !self.track.title.is_empty() && self.track.playback.duration > 0.0;
         let timeline_alpha = if has_timeline { controls_alpha.max((self.seek_flash / 0.4).min(1.0)) } else { 0.0 };
+        // A hint over a silent scene with no track. Without the sidebar it shows only for the
+        // first seconds after launch or while the mouse moves, so idle frames stay free of UI.
+        let empty = self.settings.show_track_toast && self.track.title.is_empty() && (self.vis.silent_for > 3.0 || !self.device.1);
+        let hint_target = if empty && (self.show_sidebar || controls_alpha > 0.0 || time < 12.0) { 1.0 } else { 0.0 };
+        self.hint_alpha += (hint_target - self.hint_alpha) * (1.0 - (-dt / 0.25).exp());
+        if (hint_target - self.hint_alpha).abs() < 0.01 {
+            self.hint_alpha = hint_target;
+        }
         let need_ui = self.show_sidebar
+            || self.hint_alpha > 0.0
             || (self.toast_t > 0.0 && self.settings.show_track_toast)
             || self.settings.show_stats
             || controls_alpha > 0.0
@@ -495,6 +507,8 @@ impl App {
                         frame_ms: self.frame_ms,
                         idle: self.idle,
                         device: &self.device.0,
+                        capturing: self.device.1,
+                        hint_alpha: self.hint_alpha,
                         adapter: &g.gpu.adapter_name,
                         show_sidebar: self.show_sidebar,
                         toast_alpha,
@@ -600,7 +614,9 @@ impl App {
             }
         }
 
-        self.idle = !drawer_open && controls_alpha <= 0.0 && volume_alpha <= 0.0 && timeline_alpha <= 0.0 && self.toast_t <= 0.0 && self.vis.silent_for > 3.0;
+        self.idle = !drawer_open && controls_alpha <= 0.0 && volume_alpha <= 0.0 && timeline_alpha <= 0.0 && self.toast_t <= 0.0
+            && self.hint_alpha == hint_target
+            && self.vis.silent_for > 3.0;
         self.stats.update();
         if self.trim_at.is_some_and(|t| Instant::now() >= t) {
             self.trim_at = None;

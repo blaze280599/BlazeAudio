@@ -89,6 +89,10 @@ pub struct UiCtx<'a> {
     pub frame_ms: f32,
     pub idle: bool,
     pub device: &'a str,
+    /// Loopback capture is running on the output device.
+    pub capturing: bool,
+    /// Opacity of the hint shown over a silent scene with no track.
+    pub hint_alpha: f32,
     pub adapter: &'a str,
     pub show_sidebar: bool,
     pub toast_alpha: f32,
@@ -176,6 +180,8 @@ impl UiState {
 
         if c.toast_alpha > 0.0 && c.settings.show_track_toast && !c.track.title.is_empty() {
             self.toast(ctx, scene_rect, &c, &ft, toast_lift);
+        } else if c.hint_alpha > 0.0 {
+            overlay::empty_hint(ctx, scene_rect, &c, &ft, toast_lift);
         }
 
         if c.controls_alpha > 0.0 {

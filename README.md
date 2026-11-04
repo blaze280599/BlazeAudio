@@ -59,7 +59,7 @@ Switch with the number keys, `S` for the next scene, or the buttons in **Visuals
 ## Features
 
 - **Album-art colours**: on each track change the visuals fade to colours taken from the cover. Five built-in palettes cover the times nothing is playing.
-- **Now playing**: a card with the cover and title appears on each track change (`T` shows it again). The sidebar has play/pause, skip and a progress bar.
+- **Now playing**: a card with the cover and title appears on each track change (`T` shows it again). The sidebar has play/pause, skip and a progress bar. When nothing is playing, a hint in the same corner says so, or says there's no output device to listen to.
 - **Seeking**: hover the visuals for a wide timeline you can drag, click or scroll. `Left` / `Right` jump 5 s.
 - **Volume**: hovering also shows a volume bar for the Windows output volume. `Up` / `Down` change it and `M` mutes.
 - **Window modes**: windowed with the sidebar, or borderless fullscreen (`F11`) for just the visuals.

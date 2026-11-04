@@ -111,7 +111,7 @@ impl UiState {
         ui.label(RichText::new("Changes the app's panels and controls. The visualizer keeps its own colours.").small().color(t.faint));
 
         heading(ui, t, "On the scene");
-        ui.checkbox(&mut s.show_track_toast, "Now-playing toast on track change");
+        ui.checkbox(&mut s.show_track_toast, "Now-playing toast and hints");
         ui.checkbox(&mut s.show_volume, "Volume bar");
         ui.checkbox(&mut s.show_timeline, "Track timeline (seek by dragging)");
         ui.checkbox(&mut s.show_stats, "Performance stats (F3)");

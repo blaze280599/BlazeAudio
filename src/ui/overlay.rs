@@ -1,9 +1,9 @@
-//! Things floating over the scene: stats HUD, now-playing toast, window buttons, volume bar and
-//! timeline.
+//! Things floating over the scene: stats HUD, now-playing toast, "nothing playing" hint, window
+//! buttons, volume bar and timeline.
 
-use egui::{Align2, Color32, CornerRadius, Margin, Rect, RichText, Stroke, Vec2};
+use egui::{Align2, Color32, CornerRadius, Margin, Rect, RichText, Sense, Stroke, Vec2};
 
-use super::icons::Icon;
+use super::icons::{paint_icon, Icon};
 use super::playback::seek_bar;
 use super::theme::Tokens;
 use super::widgets::icon_button;
@@ -35,6 +35,42 @@ pub(super) fn stats_hud(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens)
                     // Never wrap: the Area's width comes from its first frame, which a
                     // longer line later (e.g. a bigger RAM figure) would break.
                     ui.add(egui::Label::new(RichText::new(txt).monospace().color(t.text)).extend());
+                });
+        });
+}
+
+/// Where the now-playing card would be, when there's nothing to show in it: tells a new user
+/// to play something, or that there's no output device to listen to.
+pub(super) fn empty_hint(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens, lift: f32) {
+    let (title, body) = if c.capturing {
+        ("Nothing playing", "Play music in any app and the visuals follow it.")
+    } else {
+        ("No output device", "Connect speakers or headphones. BlazeAudio listens to the Windows default output.")
+    };
+    egui::Area::new(egui::Id::new(("empty-hint", c.capturing)))
+        .pivot(Align2::LEFT_BOTTOM)
+        .fixed_pos(scene.left_bottom() + egui::vec2(26.0, -26.0 - lift))
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.multiply_opacity(c.hint_alpha);
+            egui::Frame::new()
+                .fill(t.float)
+                .corner_radius(CornerRadius::same(14))
+                .stroke(Stroke::new(1.0_f32, t.border))
+                .inner_margin(Margin::symmetric(14, 10))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        let (r, _) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::hover());
+                        ui.painter().rect_filled(r, CornerRadius::same(8), t.control);
+                        paint_icon(ui.painter(), Icon::Audio, r.center(), t.dim);
+                        ui.vertical(|ui| {
+                            ui.set_max_width(300.0);
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(RichText::new(title).size(14.0).strong().color(t.text));
+                            ui.label(RichText::new(body).size(12.0).color(t.dim));
+                        });
+                    });
                 });
         });
 }
