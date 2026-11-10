@@ -357,7 +357,7 @@ impl App {
         if self.mode != WindowMode::Windowed {
             return;
         }
-        let Some(t) = self.dock.target().and_then(dock::info) else {
+        let Some((target, t)) = self.dock.target().and_then(|h| Some((h, dock::info(h)?))) else {
             self.undock();
             self.dock_status = "Waiting for Spotify. The panel docks once its window is open.";
             return;
@@ -440,9 +440,7 @@ impl App {
             (d.minimized_with, d.hidden) = (false, false);
             w.request_redraw();
         }
-        if t.foreground {
-            dock::raise(ours);
-        }
+        dock::stack_above(target, ours);
         self.dock_status = "Docked. Drag the panel's outer edge to resize it.";
     }
 

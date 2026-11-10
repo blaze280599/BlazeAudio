@@ -18,9 +18,9 @@ use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVE
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic,
     IsWindow, IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow, CHILDID_SELF, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE,
-    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, GWL_EXSTYLE, GW_OWNER, HWND_TOP, OBJID_WINDOW,
+    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, GWL_EXSTYLE, GW_HWNDPREV, GW_OWNER, HWND_TOP, OBJID_WINDOW,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINEVENT_OUTOFCONTEXT,
-    WS_EX_TOOLWINDOW, ANIMATIONINFO, LWA_ALPHA, SPI_GETANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetLayeredWindowAttributes, SetWindowLongW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, ANIMATIONINFO, LWA_ALPHA, SPI_GETANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetLayeredWindowAttributes, SetWindowLongW,
     SystemParametersInfoW, WS_EX_LAYERED,
 };
 use winit::event_loop::EventLoopProxy;
@@ -223,6 +223,23 @@ pub fn place(ours: HWND, x: i32, y: i32, w: i32, h: i32) {
 pub fn raise(ours: HWND) {
     unsafe {
         let _ = SetWindowPos(ours, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+/// Puts `ours` directly above Spotify's window in the z-order without taking focus, so the panel
+/// is exactly as covered as Spotify is: in front with it, behind whatever is in front of it.
+/// Docking from the background (launched from a terminal, say) would otherwise leave the panel
+/// wherever Windows put the new window, under a game or editor that Spotify is in front of.
+pub fn stack_above(target: HWND, ours: HWND) {
+    unsafe {
+        let prev = GetWindow(target, GW_HWNDPREV).ok();
+        if prev == Some(ours) {
+            return;
+        }
+        // Going in after a topmost window would make the panel topmost too; with one right above
+        // Spotify, Spotify is the first ordinary window, so the top of that band is the same place.
+        let after = prev.filter(|&h| GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 == 0).unwrap_or(HWND_TOP);
+        let _ = SetWindowPos(ours, Some(after), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
     }
 }
 
