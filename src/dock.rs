@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{CloseHandle, COLORREF, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_ROUND,
     DWM_WINDOW_CORNER_PREFERENCE,
@@ -20,7 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindow, IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow, CHILDID_SELF, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE,
     EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, GWL_EXSTYLE, GW_OWNER, HWND_TOP, OBJID_WINDOW,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINEVENT_OUTOFCONTEXT,
-    WS_EX_TOOLWINDOW,
+    WS_EX_TOOLWINDOW, ANIMATIONINFO, LWA_ALPHA, SPI_GETANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetLayeredWindowAttributes, SetWindowLongW,
+    SystemParametersInfoW, WS_EX_LAYERED,
 };
 use winit::event_loop::EventLoopProxy;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -230,6 +231,36 @@ pub fn raise_target_under(target: HWND, ours: HWND) {
     unsafe {
         let _ = SetWindowPos(target, Some(ours), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
+}
+
+/// Fades a window: `Some(a)` makes it layered at that opacity (0..1). `None` drops the layered
+/// style again, which matters: a layered window shows a held frame instead of the swapchain's
+/// live ones, so it's only layered while a fade runs.
+pub fn set_alpha(h: HWND, a: Option<f32>) {
+    unsafe {
+        let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        let layered = ex & WS_EX_LAYERED.0 != 0;
+        match a {
+            Some(a) => {
+                if !layered {
+                    SetWindowLongW(h, GWL_EXSTYLE, (ex | WS_EX_LAYERED.0) as i32);
+                }
+                let _ = SetLayeredWindowAttributes(h, COLORREF(0), (a.clamp(0.0, 1.0) * 255.0).round() as u8, LWA_ALPHA);
+            }
+            None if layered => {
+                SetWindowLongW(h, GWL_EXSTYLE, (ex & !WS_EX_LAYERED.0) as i32);
+            }
+            None => {}
+        }
+    }
+}
+
+/// The Windows setting "Animate windows when minimizing and maximizing", which the panel's fade
+/// stands in for; with it off, the panel just hides and shows.
+pub fn animations_on() -> bool {
+    let mut ai = ANIMATIONINFO { cbSize: size_of::<ANIMATIONINFO>() as u32, iMinAnimate: 1 };
+    let ok = unsafe { SystemParametersInfoW(SPI_GETANIMATION, ai.cbSize, Some(&mut ai as *mut ANIMATIONINFO as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)).is_ok() };
+    !ok || ai.iMinAnimate != 0
 }
 
 /// Asks DWM to round the window's corners like other Windows 11 apps. A frameless window gets

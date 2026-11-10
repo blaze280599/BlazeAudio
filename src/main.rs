@@ -122,7 +122,24 @@ struct Docked {
     minimized_with: bool,
     /// Hidden while Spotify is maximized (`DockFull::Hide`).
     hidden: bool,
+    /// 1 fully shown, 0 faded out.
+    opacity: f32,
+    fade: Option<Fade>,
 }
+
+/// The panel fading out as Spotify minimizes and back in as it restores. Windows animates a
+/// minimize only into a taskbar button, which a docked panel lacks.
+struct Fade {
+    start: Instant,
+    /// Fading out rather than in.
+    out: bool,
+    /// `Docked::opacity` when it started, so a fade reversed halfway carries on from there.
+    from: f32,
+}
+
+/// Lengths of the fades, close to Windows' own minimize and restore animations.
+const FADE_OUT: f32 = 0.15;
+const FADE_IN: f32 = 0.2;
 
 /// What the docked window's size and place depend on besides Spotify's window; a change re-docks.
 type DockKey = (DockSide, DockFull, u32, u32, WindowMode);
@@ -350,17 +367,29 @@ impl App {
         // window would be parked as a stub title bar in a corner of the desktop.
         if t.minimized {
             if let Some(d) = self.docked.as_mut().filter(|d| !d.hidden && !d.minimized_with) {
-                if w.is_minimized() != Some(true) {
-                    dock::hide(ours);
-                }
                 d.minimized_with = true;
+                if w.is_minimized() != Some(true) {
+                    if dock::animations_on() {
+                        d.fade = Some(Fade { start: Instant::now(), out: true, from: d.opacity });
+                        w.request_redraw();
+                    } else {
+                        dock::hide(ours);
+                    }
+                }
             }
             return;
         }
         if t.fills {
             self.dock_status = "Spotify is maximized, so there's no room beside it.";
             match self.settings.dock_full {
-                DockFull::Float => self.undock(),
+                DockFull::Float => {
+                    self.undock();
+                    // Its pre-dock spot is usually under the maximized Spotify, where it would look
+                    // gone; keep it above Spotify whenever Spotify comes to the front.
+                    if t.foreground {
+                        dock::raise(ours);
+                    }
+                }
                 DockFull::Hide => {
                     if self.docked.is_none() {
                         self.begin_dock(&w);
@@ -383,13 +412,6 @@ impl App {
         let panels = ui::panels_width(self.show_sidebar, self.settings.sidebar_expanded, self.ui.drawer.is_some());
         let width = ((self.settings.dock_width + panels) * w.scale_factor() as f32).round() as i32;
         let Some(d) = &mut self.docked else { return };
-        if d.minimized_with || d.hidden {
-            dock::show(ours);
-            // Showing a window again can bring its taskbar button back.
-            w.set_skip_taskbar(true);
-            (d.minimized_with, d.hidden) = (false, false);
-            w.request_redraw();
-        }
         // Switch sides when the chosen one would be mostly off the screen and the other has room
         // (Spotify snapped to that half of the screen, say).
         let r = t.rect;
@@ -401,10 +423,49 @@ impl App {
         d.side = if !room(self.settings.dock, 2) && room(other, 1) { other } else { self.settings.dock };
         let x = if d.side == DockSide::Left { r.left - width } else { r.right };
         dock::place(ours, x, r.top, width, r.bottom - r.top);
+        if d.minimized_with || d.hidden {
+            // Back with Spotify: fade in (from wherever a fade out had got to).
+            if d.minimized_with && dock::animations_on() {
+                if d.fade.is_none() {
+                    d.opacity = 0.0;
+                }
+                d.fade = Some(Fade { start: Instant::now(), out: false, from: d.opacity });
+            } else {
+                (d.opacity, d.fade) = (1.0, None);
+            }
+            dock::set_alpha(ours, d.fade.is_some().then_some(d.opacity));
+            dock::show(ours);
+            // Showing a window again can bring its taskbar button back.
+            w.set_skip_taskbar(true);
+            (d.minimized_with, d.hidden) = (false, false);
+            w.request_redraw();
+        }
         if t.foreground {
             dock::raise(ours);
         }
         self.dock_status = "Docked. Drag the panel's outer edge to resize it.";
+    }
+
+    /// Moves a running fade on to where it should be by now, and ends it: hidden after a fade
+    /// out, opaque (no longer layered) after a fade in. Driven by frames and, in case the window
+    /// stops getting frames, by a short timer (see `schedule`).
+    fn dock_fade(&mut self) {
+        let Some(ours) = self.gfx.as_ref().and_then(|g| dock::hwnd(&g.window)) else { return };
+        let Some(d) = &mut self.docked else { return };
+        let Some(f) = &d.fade else { return };
+        let p = (f.start.elapsed().as_secs_f32() / if f.out { FADE_OUT } else { FADE_IN }).min(1.0);
+        // Easing in on the way out and out on the way in, like Windows' own animations.
+        let (to, e) = if f.out { (0.0, p * p) } else { (1.0, 1.0 - (1.0 - p) * (1.0 - p)) };
+        d.opacity = f.from + (to - f.from) * e;
+        dock::set_alpha(ours, Some(d.opacity));
+        if p >= 1.0 {
+            if f.out {
+                dock::hide(ours);
+            } else {
+                dock::set_alpha(ours, None);
+            }
+            d.fade = None;
+        }
     }
 
     /// Starts docking: remembers where the window floats, drops its frame and its taskbar button
@@ -414,7 +475,14 @@ impl App {
             w.set_maximized(false);
         }
         let pos = w.outer_position().unwrap_or_default();
-        self.docked = Some(Docked { float: (pos, w.inner_size()), side: self.settings.dock, minimized_with: false, hidden: false });
+        self.docked = Some(Docked {
+            float: (pos, w.inner_size()),
+            side: self.settings.dock,
+            minimized_with: false,
+            hidden: false,
+            opacity: 1.0,
+            fade: None,
+        });
         w.set_decorations(false);
         w.set_skip_taskbar(true);
         if let Some(ours) = dock::hwnd(w) {
@@ -427,6 +495,7 @@ impl App {
         let Some(d) = self.docked.take() else { return };
         let Some(g) = &self.gfx else { return };
         if let Some(ours) = dock::hwnd(&g.window) {
+            dock::set_alpha(ours, None);
             if d.hidden || d.minimized_with {
                 dock::show(ours);
             }
@@ -497,6 +566,7 @@ impl App {
         let time = now.duration_since(self.start).as_secs_f32();
 
         self.gfx = Some(g);
+        self.dock_fade();
         self.sync_media();
         g = self.gfx.take().unwrap();
 
@@ -717,9 +787,15 @@ impl App {
 
     fn schedule(&mut self, el: &ActiveEventLoop) {
         let Some(g) = &self.gfx else { return };
-        // Hidden along with Spotify counts as minimized.
-        let docked_away = self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with);
-        if docked_away {
+        // Hidden along with Spotify counts as minimized, once the fade out has finished.
+        let fading = self.docked.as_ref().is_some_and(|d| d.fade.is_some());
+        let docked_away = !fading && self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with);
+        if fading {
+            // Frames move the fade; the timer moves it too if the window stops getting frames
+            // (covered by another window, say), so it can't get stuck halfway.
+            el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(8)));
+            g.window.request_redraw();
+        } else if docked_away {
             // Nothing to draw, but check now and then that Spotify is still there: if it was killed
             // without a destroy event, nothing else would bring the panel back.
             el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(2)));
@@ -816,7 +892,10 @@ impl ApplicationHandler<dock::Wake> for App {
 
     fn new_events(&mut self, el: &ActiveEventLoop, cause: StartCause) {
         if let StartCause::ResumeTimeReached { .. } = cause {
-            if self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with) {
+            if self.docked.as_ref().is_some_and(|d| d.fade.is_some()) {
+                self.dock_fade();
+                self.schedule(el);
+            } else if self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with) {
                 if self.dock.lost() {
                     self.dock_sync();
                 }
