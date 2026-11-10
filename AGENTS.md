@@ -216,7 +216,7 @@ The UI is **egui**, in immediate mode, redrawn every frame it runs.
 | `widgets.rs` | `knob` (slider with a label row, reset-to-default and double-click reset), `choice` (segmented control with label and reset), `segmented`, `heading`, `nav_item`, `icon_button`, `labeled_icon_button` (icon plus a short label, optionally tinted, for on-scene controls that must explain themselves), `spectrum_meter`, `Fmt` / `num()` / `PCT` value formatting |
 | `icons.rs` | `Icon` enum + `paint_icon` (about 16 pt line icons drawn with egui shapes) |
 | `playback.rs` | `seek_bar` (sidebar click-to-jump, or on-scene drag/scroll scrubbing), `time_bubble`, `transport`, `fmt_time` |
-| `sidebar.rs` | Logo, section list, collapse/hide, now-playing card (art, title, seek bar, transport, spectrum) |
+| `sidebar.rs` | Logo, section list, collapse/hide, now-playing card (art, title, seek bar, transport, spectrum; left out while docked, since Spotify's player is beside it) |
 | `drawer.rs` | Drawer shell, Visuals footer (Randomize / Undo / Reset, undo depth 32), and one function per section: `visuals`, `audio`, `palette`, `general` (method; owns the reset confirm); also `palette_row`, `theme_card` |
 | `overlay.rs` | `stats_hud`, `toast`, `empty_hint` ("Nothing playing" / "No output device" in the toast's place), `window_buttons` (show-sidebar while it's hidden, the Dock / Undock / Waiting toggle, fullscreen), `volume_bar` (uses `wake::WakeSlider`), `timeline`, `dock_grip` (the docked panel's resize edge) |
 

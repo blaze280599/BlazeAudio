@@ -1,4 +1,5 @@
-//! The docked sidebar: logo, section list, collapse button and the now-playing card.
+//! The docked sidebar: logo, section list, collapse button and the now-playing card (left out while
+//! docked beside Spotify, whose own player is right there).
 
 use egui::{Align2, Color32, CornerRadius, FontId, Margin, Rect, RichText, Sense, Stroke, Vec2};
 
@@ -48,8 +49,11 @@ impl UiState {
             if (c.mode != WindowMode::Windowed || c.dock_edge.is_some()) && nav_item(ui, t, Icon::HideSidebar, "Hide sidebar", false, expanded).on_hover_text("F1").clicked() {
                 actions.push(UiAction::HideSidebar);
             }
-            ui.add_space(6.0);
-            self.now_playing(ui, c, t, accent, expanded, actions);
+            // Docked, Spotify's own player sits right beside the panel; a second one is clutter.
+            if c.dock_edge.is_none() {
+                ui.add_space(6.0);
+                self.now_playing(ui, c, t, accent, expanded, actions);
+            }
         });
     }
 

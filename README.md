@@ -59,7 +59,7 @@ Switch with the buttons in **Visuals**. **Auto-switch** can move on by itself on
 ## Features
 
 - **Album-art colours**: on each track change the visuals fade to colours taken from the cover. Five built-in palettes cover the times nothing is playing.
-- **Now playing**: a card with the cover and title appears on each track change. The sidebar has play/pause, skip and a progress bar. When nothing is playing, a hint in the same corner says so, or says there's no output device to listen to.
+- **Now playing**: a card with the cover and title appears on each track change. The sidebar has play/pause, skip and a progress bar, except while docked beside Spotify, whose own player is right there. When nothing is playing, a hint in the same corner says so, or says there's no output device to listen to.
 - **Seeking**: hover the visuals for a wide timeline you can drag, click or scroll.
 - **Volume**: hovering also shows a volume bar for the Windows output volume, with a mute button.
 - **Window modes**: windowed with the sidebar, or borderless fullscreen for just the visuals. The button at the top right of the visuals, or a double-click on them, switches between the two.
