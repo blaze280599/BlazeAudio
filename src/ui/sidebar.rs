@@ -46,7 +46,7 @@ impl UiState {
                 c.settings.sidebar_expanded = !expanded;
             }
             // Fullscreen and a docked panel are for the visuals; elsewhere the sidebar stays put.
-            if (c.mode != WindowMode::Windowed || c.dock_edge.is_some()) && nav_item(ui, t, Icon::HideSidebar, "Hide sidebar", false, expanded).on_hover_text("F1").clicked() {
+            if (c.mode != WindowMode::Windowed || c.dock_edge.is_some()) && nav_item(ui, t, Icon::HideSidebar, "Hide sidebar", false, expanded).clicked() {
                 actions.push(UiAction::HideSidebar);
             }
             // Docked, Spotify's own player sits right beside the panel; a second one is clutter.
