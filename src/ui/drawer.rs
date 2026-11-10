@@ -89,29 +89,39 @@ impl UiState {
     fn general(&mut self, ui: &mut egui::Ui, c: &mut UiCtx, t: &Tokens, actions: &mut Vec<UiAction>) {
         let s = &mut *c.settings;
         let d = Settings::default();
-        let modes = [(WindowMode::Windowed, "Windowed"), (WindowMode::Fullscreen, "Fullscreen")];
-        ui.label(RichText::new("Mode").color(t.dim));
-        let mut mode = c.mode;
-        if segmented(ui, t, &mut mode, &modes) {
-            actions.push(UiAction::SetMode(mode));
+        // Beside Spotify (docked, the default) or a window of its own.
+        let mut beside = s.dock != DockSide::Off;
+        choice(ui, t, "Mode", &mut beside, d.dock != DockSide::Off, &[(true, "Beside Spotify"), (false, "Standalone")]);
+        if beside != (s.dock != DockSide::Off) {
+            if beside {
+                s.dock = if s.dock_last == DockSide::Off { DockSide::Right } else { s.dock_last };
+            } else {
+                s.dock_last = s.dock;
+                s.dock = DockSide::Off;
+            }
         }
-        choice(ui, t, "Start in", &mut s.start_mode, d.start_mode, &modes);
-
-        heading(ui, t, "Dock to Spotify");
-        let sides = [(DockSide::Off, "Off"), (DockSide::Left, "Left"), (DockSide::Right, "Right")];
-        choice(ui, t, "Side", &mut s.dock, d.dock, &sides);
-        if s.dock != DockSide::Off {
+        if beside {
+            let sides = [(DockSide::Left, "Left"), (DockSide::Right, "Right")];
+            choice(ui, t, "Side", &mut s.dock, d.dock, &sides);
             s.dock_last = s.dock;
-        }
-        if s.dock != DockSide::Off {
             knob(ui, t, "Panel width", &mut s.dock_width, d.dock_width, 320.0..=1600.0, num(0, " px"));
             let fulls = [(DockAway::Float, "Float"), (DockAway::Hide, "Hide")];
             choice(ui, t, "When Spotify is maximized", &mut s.dock_full, d.dock_full, &fulls);
             choice(ui, t, "When Spotify closes", &mut s.dock_closed, d.dock_closed, &fulls);
             ui.label(RichText::new(c.dock_status).small().color(t.faint));
         } else {
-            ui.label(RichText::new("Sticks to the side of Spotify's window, matching its height, and follows it around.").small().color(t.faint));
+            ui.label(RichText::new("A window of its own. Beside Spotify sticks to the side of Spotify's window, matching its height, and follows it around.").small().color(t.faint));
         }
+        ui.label(RichText::new("Closing the window keeps BlazeAudio in the tray. Quit from the tray icon's menu.").small().color(t.faint));
+
+        heading(ui, t, "Window");
+        let modes = [(WindowMode::Windowed, "Windowed"), (WindowMode::Fullscreen, "Fullscreen")];
+        ui.label(RichText::new("View").color(t.dim));
+        let mut mode = c.mode;
+        if segmented(ui, t, &mut mode, &modes) {
+            actions.push(UiAction::SetMode(mode));
+        }
+        choice(ui, t, "Start in", &mut s.start_mode, d.start_mode, &modes);
 
         heading(ui, t, "Theme");
         let w = (ui.available_width() - 12.0) / 3.0;

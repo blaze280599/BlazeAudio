@@ -1,6 +1,6 @@
 # BlazeAudio
 
-An HDR music visualizer for Windows. It listens to whatever your PC is playing (Spotify, a browser, a game, anything) and turns it into audio-reactive visuals. It picks up the song title and album art, takes its colours from the cover, and runs in a window or fullscreen.
+An HDR music visualizer for Windows, made as a companion to Spotify. It sits beside Spotify's window as a panel that follows it around, or runs standalone in a window or fullscreen. It listens to whatever your PC is playing (Spotify, a browser, a game, anything) and turns it into audio-reactive visuals. It picks up the song title and album art and takes its colours from the cover.
 
 Everything ships as one portable `blazeaudio.exe`. There's nothing to install and no account to sign into. The only time it goes online is to check GitHub for a new version, which you can turn off.
 
@@ -21,15 +21,17 @@ To check the download, compare its hash with `blazeaudio.exe.sha256` on the rele
 
 **Updates:** by default the app checks GitHub when it starts and installs a new version in the background, which runs from the next start. **General → Updates** can switch that to just notifying you, or off.
 
-**Uninstalling:** delete `blazeaudio.exe`, and `%APPDATA%\BlazeAudio` if you also want your settings gone.
+**Uninstalling:** quit it from its tray icon's menu, delete `blazeaudio.exe`, and `%APPDATA%\BlazeAudio` if you also want your settings gone.
 
 ## Getting started
 
-1. Run `blazeaudio.exe`.
+1. Run `blazeaudio.exe`. It docks beside Spotify's window. If Spotify isn't open, it waits as a normal window and docks once Spotify opens.
 2. Play music. BlazeAudio visualizes everything your default output device plays.
 3. If the music app reports what's playing to Windows (Spotify does), you'll see the title, artist and cover, and the visuals take on the cover's colours.
 
-Settings live in the sidebar on the left. **Hide sidebar** at its bottom puts it away; while it's hidden, hovering over the visuals shows a sidebar button next to the fullscreen button at the top right.
+BlazeAudio lives in the notification area (the tray, by the clock). Click its icon to show or hide the window, or right-click it to switch between **Beside Spotify** and **Standalone**, or to quit. Closing the window keeps it running there.
+
+Settings live in the sidebar. While docked the panel starts with just the visuals; hovering shows a **Show sidebar** button at the bottom left. In a standalone window, **Hide sidebar** at its bottom puts it away, and while it's hidden, hovering over the visuals shows a sidebar button next to the fullscreen button at the top right.
 
 ## Scenes
 
@@ -62,8 +64,9 @@ Switch with the buttons in **Visuals**. **Auto-switch** can move on by itself on
 - **Now playing**: a card with the cover and title appears on each track change. The sidebar has play/pause, skip and a progress bar, except while docked beside Spotify, whose own player is right there. When nothing is playing, a hint in the same corner says so, or says there's no output device to listen to.
 - **Seeking**: hover the visuals for a wide timeline you can drag, click or scroll.
 - **Volume**: hovering also shows a volume bar for the Windows output volume, with a mute button.
+- **Tray icon**: the app keeps an icon in the notification area whether it's docked or standalone. A click shows or hides the window. The right-click menu also switches modes and quits. The close button hides the window to the tray rather than quitting, and hovering the icon shows the track playing.
 - **Window modes**: windowed with the sidebar, or borderless fullscreen for just the visuals. The button at the top right of the visuals, or a double-click on them, switches between the two.
-- **Dock to Spotify**: the green **Dock to Spotify** button at the top right of the visuals (or **General → Dock to Spotify**) sticks the window to the left or right of Spotify's window (the spotify.com app or the Microsoft Store one) as a frameless panel with Windows 11's rounded corners. It matches Spotify's height, follows it when it moves or resizes, and comes to the front with it. The panel leaves out the sidebar's player, the volume bar and the timeline, since Spotify's own are right beside it. It has no taskbar button of its own while docked: when Spotify is minimized it fades out, and it fades back in when Spotify returns (unless window animations are off in Windows' settings). The same button then reads **Undock** and puts the window back where it was; it reads **Waiting for Spotify** while docking is on but Spotify isn't open or is maximized (click it to stop). It docks on the side you last chose in General. If Spotify closes (or goes to the tray), the panel either goes back to a normal window or fades out of sight, whichever you pick under **When Spotify closes**; either way it docks again when Spotify reopens. While it's hidden, launching BlazeAudio again brings it back as a normal window. Drag the panel's outer edge to change its width; the sidebar button at the top right brings in the sidebar, which widens the panel outward, and **Hide sidebar** at its bottom puts it away. If the chosen side would be off the screen it uses the other one. While Spotify is maximized there's no room beside it, so the panel either floats as a normal window, kept in front of Spotify, or hides, whichever you pick.
+- **Beside Spotify** (the default): **General → Mode** chooses between Beside Spotify and Standalone, as do the green **Dock to Spotify** button at the top right of the visuals and the tray menu. Beside Spotify sticks the window to the left or right of Spotify's window (the spotify.com app or the Microsoft Store one) as a frameless panel with Windows 11's rounded corners. It matches Spotify's height, follows it when it moves or resizes, and comes to the front with it. The panel leaves out the sidebar's player, the volume bar and the timeline, since Spotify's own are right beside it. It has no taskbar button of its own while docked: when Spotify is minimized it fades out, and it fades back in when Spotify returns (unless window animations are off in Windows' settings). The same button then reads **Undock** and puts the window back where it was; it reads **Waiting for Spotify** while docking is on but Spotify isn't open or is maximized (click it to stop). It docks on the side you last chose in General. If Spotify closes (or goes to the tray), the panel either goes back to a normal window or fades out of sight, whichever you pick under **When Spotify closes**; either way it docks again when Spotify reopens. While it's hidden, clicking the tray icon or launching BlazeAudio again brings it back as a normal window. Drag the panel's outer edge to change its width; the **Show sidebar** button at the bottom left brings in the sidebar, which widens the panel outward, and **Hide sidebar** at its bottom puts it away. If the chosen side would be off the screen it uses the other one. While Spotify is maximized there's no room beside it, so the panel either floats as a normal window, kept in front of Spotify, or hides, whichever you pick.
 - **Look controls**: bloom, exposure, chromatic aberration, film grain, vignette and per-scene options, each resettable on its own. **Randomize** rolls a new look, **Undo** steps back and **Reset** restores the defaults.
 - **Lightweight**: about 0.1% CPU when idle and under 1% while playing, with around 20 MB of memory. It slows down when nothing is playing and stops rendering when hidden.
 - **Updates itself**: on launch it checks GitHub for a new release. By default it downloads it in the background and swaps it in, so the next start runs the new version (or click **Restart now** under General). Set **Updates** to **Notify** to just be told, or **Off** to never go online unless you click **Check now**.
@@ -76,7 +79,7 @@ The sidebar has four sections:
 - **Visuals**: scene, auto-switch, the scene's own options, and the shared look effects
 - **Audio**: sensitivity, how fast bars rise and fall, beat sensitivity
 - **Palette**: album colours on or off, and the fallback palette
-- **General**: window and startup mode, docking to Spotify, theme (Dark, OLED black, Light), on-scene extras, updates
+- **General**: mode (Beside Spotify or Standalone) and docking options, window and startup view, theme (Dark, OLED black, Light), on-scene extras, updates
 
 A changed setting shows a reset button next to it; double-clicking its label also resets it. Settings are saved to `%APPDATA%\BlazeAudio\settings.json`.
 

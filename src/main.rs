@@ -9,6 +9,7 @@ mod scenes;
 mod settings;
 mod snapshot;
 mod sys;
+mod tray;
 mod ui;
 mod update;
 mod vis;
@@ -46,6 +47,14 @@ pub fn make_instance() -> wgpu::Instance {
             ..Default::default()
         },
     })
+}
+
+/// Sent to the event loop from Win32 callbacks on the main thread.
+pub enum UserEvent {
+    /// The followed Spotify window moved, resized, minimized, came to the front or went away.
+    Dock,
+    /// A click or menu choice on the tray icon.
+    Tray(tray::Cmd),
 }
 
 pub fn audio_params(s: &Settings) -> AudioParams {
@@ -213,6 +222,15 @@ struct App {
     dock_status: &'static str,
     /// The panel's edge is being dragged; its width follows the window's until the button is up.
     dock_resizing: bool,
+
+    /// `None` when Windows wouldn't add the icon; closing the window then quits.
+    tray: Option<tray::Tray>,
+    /// Hidden to the tray (close button, tray icon); only the tray or a second launch shows it again.
+    tray_hidden: bool,
+    focused: bool,
+    /// When the window last lost focus. A tray click takes the focus first, so a click that
+    /// comes right after counts as a click on a window that was in use.
+    focus_lost: Instant,
 }
 
 impl App {
@@ -267,6 +285,10 @@ impl App {
             dock_key: None,
             dock_status: "",
             dock_resizing: false,
+            tray: None,
+            tray_hidden: false,
+            focused: false,
+            focus_lost: now,
             settings,
         }
     }
@@ -350,6 +372,10 @@ impl App {
     /// back to a normal window. Runs on Spotify's window events and when a dock input changes.
     fn dock_sync(&mut self) {
         dock::clear_pending();
+        // Hidden to the tray it stays put; showing it again re-docks.
+        if self.tray_hidden {
+            return;
+        }
         self.dock_key = Some(self.dock_key());
         let Some(w) = self.gfx.as_ref().map(|g| g.window.clone()) else { return };
         let Some(ours) = dock::hwnd(&w) else { return };
@@ -527,6 +553,95 @@ impl App {
         g.window.request_redraw();
     }
 
+    /// Beside Spotify (on the side docking last used) or standalone. Saves.
+    fn set_docking(&mut self, on: bool) {
+        let s = &mut self.settings;
+        if on {
+            s.dock = if s.dock_last == DockSide::Off { DockSide::Right } else { s.dock_last };
+        } else {
+            if s.dock != DockSide::Off {
+                s.dock_last = s.dock;
+            }
+            s.dock = DockSide::Off;
+        }
+        s.save();
+    }
+
+    /// On screen for the user: not hidden to the tray, minimized or gone along with Spotify.
+    fn on_screen(&self) -> bool {
+        !self.tray_hidden && !self.minimized && !self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with)
+    }
+
+    /// Hides the window and leaves the app running in the tray: the close button, a tray click or
+    /// the tray menu. Saves, since the next thing may be a shutdown.
+    fn hide_to_tray(&mut self) {
+        if self.tray_hidden {
+            return;
+        }
+        self.remember_window();
+        self.settings.save();
+        let Some(ours) = self.gfx.as_ref().and_then(|g| dock::hwnd(&g.window)) else { return };
+        if let Some(d) = self.docked.as_mut().filter(|d| d.fade.is_some()) {
+            (d.opacity, d.fade) = (1.0, None);
+            dock::set_alpha(ours, None);
+        }
+        dock::hide(ours);
+        self.tray_hidden = true;
+    }
+
+    /// Brings the window back from the tray, or from wherever it was: minimized, or gone along with
+    /// Spotify, in which case Spotify comes back too (or, if Spotify is closed, the panel floats).
+    fn show_from_tray(&mut self) {
+        let Some(w) = self.gfx.as_ref().map(|g| g.window.clone()) else { return };
+        let Some(ours) = dock::hwnd(&w) else { return };
+        self.tray_hidden = false;
+        if self.docked.as_ref().is_some_and(|d| d.minimized_with || d.hidden) {
+            match self.dock.current().and_then(|t| Some((t, dock::info(t)?))) {
+                Some((t, i)) if i.minimized => {
+                    dock::show(t);
+                    self.dock_sync();
+                }
+                Some(_) => {}
+                None => self.undock(),
+            }
+        }
+        if !dock::visible(ours) {
+            dock::show(ours);
+        }
+        if w.is_minimized() == Some(true) {
+            w.set_minimized(false);
+        }
+        w.focus_window();
+        self.dock_key = None;
+        w.request_redraw();
+    }
+
+    fn tray_cmd(&mut self, el: &ActiveEventLoop, cmd: tray::Cmd) {
+        match cmd {
+            tray::Cmd::Click => {
+                if self.on_screen() && (self.focused || self.focus_lost.elapsed() < Duration::from_millis(600)) {
+                    self.hide_to_tray();
+                } else {
+                    self.show_from_tray();
+                }
+            }
+            tray::Cmd::Show => self.show_from_tray(),
+            tray::Cmd::Hide => self.hide_to_tray(),
+            // Shown first, so the window takes the new mode where the user can see it.
+            tray::Cmd::Docked(on) => {
+                self.show_from_tray();
+                self.set_docking(on);
+            }
+            tray::Cmd::Quit => {
+                self.remember_window();
+                self.settings.save();
+                el.exit();
+                return;
+            }
+        }
+        self.schedule(el);
+    }
+
     fn toggle_mode(&mut self, m: WindowMode) {
         let target = if self.mode == m { WindowMode::Windowed } else { m };
         self.apply_mode(target);
@@ -550,12 +665,16 @@ impl App {
                         self.settings.visual = self.settings.visual.next();
                     }
                 }
+                let title = match (t.title.is_empty(), t.artist.is_empty()) {
+                    (true, _) => "BlazeAudio".to_owned(),
+                    (false, true) => format!("{} · BlazeAudio", t.title),
+                    (false, false) => format!("{} – {} · BlazeAudio", t.title, t.artist),
+                };
                 if let Some(g) = &self.gfx {
-                    g.window.set_title(&match (t.title.is_empty(), t.artist.is_empty()) {
-                        (true, _) => "BlazeAudio".to_owned(),
-                        (false, true) => format!("{} · BlazeAudio", t.title),
-                        (false, false) => format!("{} – {} · BlazeAudio", t.title, t.artist),
-                    });
+                    g.window.set_title(&title);
+                }
+                if let Some(tr) = &self.tray {
+                    tr.set_tip(&title);
                 }
             }
             if let Some(g) = &mut self.gfx {
@@ -748,17 +867,8 @@ impl App {
                 ui::UiAction::SetMode(m) => self.apply_mode(m),
                 ui::UiAction::HideSidebar => self.set_sidebar_visible(false),
                 ui::UiAction::ShowSidebar => self.set_sidebar_visible(true),
-                ui::UiAction::Dock => {
-                    self.settings.dock = if self.settings.dock_last == DockSide::Off { DockSide::Right } else { self.settings.dock_last };
-                    self.settings.save();
-                }
-                ui::UiAction::Undock => {
-                    if self.settings.dock != DockSide::Off {
-                        self.settings.dock_last = self.settings.dock;
-                    }
-                    self.settings.dock = DockSide::Off;
-                    self.settings.save();
-                }
+                ui::UiAction::Dock => self.set_docking(true),
+                ui::UiAction::Undock => self.set_docking(false),
                 ui::UiAction::Media(cmd) => self.media.send(cmd),
                 ui::UiAction::Update(cmd) => self.updater.send(cmd),
                 ui::UiAction::Restart => {
@@ -803,7 +913,13 @@ impl App {
     }
 
     fn schedule(&mut self, el: &ActiveEventLoop) {
+        tray::set_state(self.on_screen(), self.settings.dock != DockSide::Off);
         let Some(g) = &self.gfx else { return };
+        if self.tray_hidden {
+            // Nothing to draw and nothing to follow; the tray or a second launch wakes it.
+            el.set_control_flow(ControlFlow::Wait);
+            return;
+        }
         // Hidden along with Spotify counts as minimized, once the fade out has finished.
         let fading = self.docked.as_ref().is_some_and(|d| d.fade.is_some());
         let docked_away = !fading && self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with);
@@ -830,11 +946,12 @@ impl App {
     }
 }
 
-impl ApplicationHandler<dock::Wake> for App {
-    /// Spotify's window moved, resized, minimized, came to the front or went away.
-    fn user_event(&mut self, _el: &ActiveEventLoop, _: dock::Wake) {
-        if !self.dock_resizing {
-            self.dock_sync();
+impl ApplicationHandler<UserEvent> for App {
+    fn user_event(&mut self, el: &ActiveEventLoop, ev: UserEvent) {
+        match ev {
+            UserEvent::Dock if !self.dock_resizing => self.dock_sync(),
+            UserEvent::Dock => {}
+            UserEvent::Tray(cmd) => self.tray_cmd(el, cmd),
         }
     }
 
@@ -909,7 +1026,9 @@ impl ApplicationHandler<dock::Wake> for App {
 
     fn new_events(&mut self, el: &ActiveEventLoop, cause: StartCause) {
         if let StartCause::ResumeTimeReached { .. } = cause {
-            if self.docked.as_ref().is_some_and(|d| d.fade.is_some()) {
+            if self.tray_hidden {
+                self.schedule(el);
+            } else if self.docked.as_ref().is_some_and(|d| d.fade.is_some()) {
                 self.dock_fade();
                 self.schedule(el);
             } else if self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with) {
@@ -935,6 +1054,8 @@ impl ApplicationHandler<dock::Wake> for App {
             }
         }
         match event {
+            // Closing leaves the app in the tray; Quit in the tray menu exits.
+            WindowEvent::CloseRequested if self.tray.is_some() => self.hide_to_tray(),
             WindowEvent::CloseRequested => {
                 self.remember_window();
                 self.settings.save();
@@ -976,6 +1097,11 @@ impl ApplicationHandler<dock::Wake> for App {
             // Spotify, it was brought back by hand (launching it again): float as a normal window.
             // Windows may activate it mid-fade as Spotify goes; that one doesn't count.
             WindowEvent::Focused(true) => {
+                self.focused = true;
+                // Shown by a second launch while hidden to the tray.
+                if self.tray_hidden {
+                    self.show_from_tray();
+                }
                 if self.docked.as_ref().is_some_and(|d| (d.hidden || d.minimized_with) && d.fade.is_none()) {
                     self.undock();
                 } else if let (Some(_), Some(target), Some(g)) = (&self.docked, self.dock.current(), &self.gfx) {
@@ -983,6 +1109,10 @@ impl ApplicationHandler<dock::Wake> for App {
                         dock::raise_target_under(target, ours);
                     }
                 }
+            }
+            WindowEvent::Focused(false) => {
+                self.focused = false;
+                self.focus_lost = Instant::now();
             }
             WindowEvent::Occluded(o) => {
                 #[cfg(debug_assertions)]
@@ -1031,6 +1161,7 @@ impl ApplicationHandler<dock::Wake> for App {
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
         self.settings.save();
+        self.tray = None;
     }
 }
 
@@ -1044,7 +1175,7 @@ fn main() {
     if already_running(args.iter().any(|a| a == "--relaunch")) {
         return;
     }
-    let event_loop = match EventLoop::<dock::Wake>::with_user_event().build() {
+    let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(e) => e,
         Err(e) => {
             fatal(&format!("Could not start event loop: {e}"));
@@ -1054,5 +1185,6 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Wait);
     dock::init(event_loop.create_proxy());
     let mut app = App::new();
+    app.tray = tray::Tray::new(event_loop.create_proxy());
     let _ = event_loop.run_app(&mut app);
 }

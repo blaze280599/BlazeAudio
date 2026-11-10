@@ -27,23 +27,21 @@ use winit::event_loop::EventLoopProxy;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
-/// User event sent to the event loop when the followed Spotify window moved, resized,
-/// minimized, came to the front or went away.
-pub struct Wake;
+use crate::UserEvent;
 
 thread_local! {
     /// Hook callbacks run on the main thread (the one that set the hooks), so the proxy lives here.
-    static PROXY: RefCell<Option<EventLoopProxy<Wake>>> = const { RefCell::new(None) };
+    static PROXY: RefCell<Option<EventLoopProxy<UserEvent>>> = const { RefCell::new(None) };
 }
 /// The followed window's handle, for the hook callback's filter.
 static TARGET: AtomicIsize = AtomicIsize::new(0);
-/// A `Wake` is queued and not yet handled; a window drag fires hundreds of events, one wake covers them.
+/// A `UserEvent::Dock` is queued and not yet handled; a window drag fires hundreds of events, one wake covers them.
 static PENDING: AtomicBool = AtomicBool::new(false);
 
 /// How often to look for Spotify's window while docking is on and it isn't found.
 const SEARCH_EVERY: Duration = Duration::from_secs(2);
 
-pub fn init(proxy: EventLoopProxy<Wake>) {
+pub fn init(proxy: EventLoopProxy<UserEvent>) {
     PROXY.with(|p| *p.borrow_mut() = Some(proxy));
 }
 
@@ -60,7 +58,7 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, _event: u32, hwnd: HWND, ob
     if !PENDING.swap(true, Ordering::Relaxed) {
         PROXY.with(|p| {
             if let Some(p) = &*p.borrow() {
-                let _ = p.send_event(Wake);
+                let _ = p.send_event(UserEvent::Dock);
             }
         });
     }
@@ -301,6 +299,11 @@ pub fn show(h: HWND) {
     unsafe {
         let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
     }
+}
+
+/// The window is shown: not hidden, though it may be minimized.
+pub fn visible(h: HWND) -> bool {
+    unsafe { IsWindowVisible(h).as_bool() }
 }
 
 /// The primary mouse button is held: an edge drag started with `drag_resize_window` is still going.

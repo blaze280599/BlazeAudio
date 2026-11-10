@@ -148,7 +148,8 @@ impl Default for Settings {
             theme: UiTheme::Dark,
             updates: UpdateMode::Auto,
             window: None,
-            dock: DockSide::Off,
+            // A Spotify companion first; Standalone is the choice.
+            dock: DockSide::Right,
             dock_last: DockSide::Right,
             dock_width: 440.0,
             dock_full: DockAway::Float,
@@ -292,6 +293,15 @@ mod tests {
         assert_eq!((old.dock_full, old.dock_closed), (DockAway::Hide, DockAway::Float));
         let new: Settings = serde_json::from_str(r#"{"dock":"Right","dock_closed":"Hide"}"#).unwrap();
         assert_eq!(new.dock_closed, DockAway::Hide);
+    }
+
+    #[test]
+    fn docked_by_default_but_standalone_kept() {
+        // A new install starts beside Spotify; a file that chose standalone stays standalone.
+        let fresh: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(fresh.dock, DockSide::Right);
+        let standalone: Settings = serde_json::from_str(r#"{"dock":"Off"}"#).unwrap();
+        assert_eq!(standalone.dock, DockSide::Off);
     }
 
     #[test]

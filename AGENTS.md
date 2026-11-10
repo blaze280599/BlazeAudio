@@ -13,7 +13,9 @@ BlazeAudio is a single-binary Windows music visualizer written in Rust.
 - It **captures whatever the PC is playing** through WASAPI loopback (no driver, no virtual cable).
 - It **reads now-playing info and album art** from the Windows media session API (GSMTC), so Spotify or a browser shows title, artist and cover. Play, pause, skip and seek go back through the same API.
 - It **renders audio-reactive HDR scenes** with wgpu on DirectX 12, followed by bloom, ACES tonemapping and film effects.
+- It's **a Spotify companion first**: by default (`settings.dock` = `Right`) it docks beside Spotify's window. **Standalone** (`dock` = `Off`) is the other mode, chosen in General → Mode, with the on-scene Dock toggle or from the tray menu.
 - It has **two window modes**: windowed with a docked egui sidebar, and borderless fullscreen.
+- It **lives in the notification area**: a tray icon (`tray.rs`) shows or hides the window and switches mode. The close button hides the window to the tray; only Quit in the tray menu exits.
 - It **can dock beside Spotify's window**: a frameless panel that matches Spotify's height and follows it around.
 - It **controls the system output volume** through Core Audio.
 - It **updates itself** from this repo's GitHub releases. It's a portable exe, so the update replaces the exe in place.
@@ -31,7 +33,7 @@ These are product decisions. Don't change them without the user asking.
 | Portable, one self-contained `.exe` | No installer and no code signing. Static CRT (`.cargo/config.toml`), no runtime asset files. Shaders, fonts and icons are embedded (`include_str!`, `epaint_default_fonts`, painted icons). The exe's icon and version info are Windows resources that `build.rs` renders and writes as a `.res` file for the linker, with no SDK resource compiler; `set_icons` in `main.rs` loads the title-bar and taskbar icons from that resource (icon group 1). Don't add files the exe must load at runtime. The one exception is Picture Disc reading fonts that ship with Windows (Arial regular, italic and bold, then CJK fallbacks) on track changes, with the bundled font as a fallback. |
 | Very low idle cost | About 0.1% CPU idle and 0.6% playing, about 20 MB working set. Don't add per-frame allocations in hot paths, polling threads, or work that runs while silent or hidden. |
 | Network only for update checks | The one network use is `update.rs` asking GitHub for the latest release and downloading it, which the Updates setting can turn off. Metadata comes from the OS, not web APIs. Don't add other network calls, telemetry or HTTP crates (`update.rs` uses WinRT `HttpClient` from the `windows` crate). |
-| Single instance | A named mutex plus `FindWindowW` on the window class `BlazeAudio`. A second launch brings the first window to the front and exits. `--relaunch` (used by Restart now after an update) instead waits up to 5 s for the old copy to close. |
+| Single instance | A named mutex plus `FindWindowW` on the window class `BlazeAudio`. A second launch brings the first window to the front (showing it if it was hidden to the tray) and exits. `--relaunch` (used by Restart now after an update) instead waits up to 5 s for the old copy to close. |
 
 ---
 
@@ -63,7 +65,7 @@ cargo run -- --snapshot snapshots    # headless self-test: PNGs + report.txt, no
 - `panic = "abort"` in release: any panic, including `.unwrap()` on a poisoned mutex, kills the process without unwinding. Avoid new panicking paths on the main or worker threads.
 - Running the real app reads and writes `%APPDATA%\BlazeAudio\settings.json`. For test runs, point it at a scratch folder so you don't change the user's settings: set `APPDATA` for that process only.
 - Only one copy runs at a time. If the user already has BlazeAudio open, launching yours just focuses theirs and exits immediately. Check with `tasklist | grep -i blazeaudio`.
-- Close it gracefully (`taskkill //IM blazeaudio.exe` from Git Bash, without `/F`) so it saves settings the way a real close does.
+- Close it gracefully (`taskkill //IM blazeaudio.exe` from Git Bash, without `/F`) so it saves settings and removes its tray icon the way Quit does. The close button only hides the window, but `taskkill` also closes the hidden tray window, and that one quits. A forced kill leaves a dead tray icon behind until the mouse passes over it.
 
 ### Environment variables
 
@@ -100,7 +102,9 @@ Python on this machine may not have PIL, so compare files with `cmp` or a hash r
 | `update` | `update.rs` `worker` | `update::Status` plus a `version` counter | `Updater::version()` / `status()`; `UpdateCmd::{Check, Install}` in through a channel |
 | main (winit) | `main.rs` `App` | Everything else | — |
 
-The dock (`dock.rs`) has no thread of its own. Its WinEvent hooks are out-of-context, so Windows delivers them on the main thread through winit's message pump. The callback only sends a `dock::Wake` user event, and `App::user_event` re-docks.
+The dock (`dock.rs`) has no thread of its own. Its WinEvent hooks are out-of-context, so Windows delivers them on the main thread through winit's message pump. The callback only sends a `UserEvent::Dock`, and `App::user_event` re-docks.
+
+The tray icon (`tray.rs`) has no thread either. It talks to a hidden top-level window of its own (class `BlazeAudio.Tray`) on the main thread, whose window procedure sends `UserEvent::Tray(Cmd)`. The right-click menu runs its modal loop inside that window procedure, outside the app's event handler, so frames keep coming while it's open; what it offers comes from `tray::set_state`, which `schedule()` updates.
 
 Rules:
 
@@ -126,7 +130,7 @@ submit, present
 drawer open → audio.set_params(); drawer just closed → settings.save()
 apply UiActions (SetMode, HideSidebar, Media, Update, Restart)
 idle = nothing on screen needs updates && silent > 3 s
-schedule(): ControlFlow::Wait + request_redraw | WaitUntil(idle period) | Wait when minimized/occluded
+schedule(): ControlFlow::Wait + request_redraw | WaitUntil(idle period) | Wait when minimized/occluded/hidden to the tray
 ```
 
 Key facts:
@@ -134,13 +138,19 @@ Key facts:
 - **egui only runs when something is visible**: the sidebar, toast, "nothing playing" hint, stats, on-scene controls, the volume bar or the timeline. The `need_ui` expression lists them. Anything new that draws over the scene must be added there and to `idle`, or it will freeze or vanish.
 - **The UI runs before rendering** because the docked sidebar decides the scene viewport. Scene targets are sized to the viewport times `render_scale`. When that size changes, `Gpu::rebuild_targets` rebuilds the bloom chain and calls `Scene::resize` on every scene.
 - **Frame pacing**: when active, vsync (`AutoVsync`) paces frames through `request_redraw`. When idle, `WaitUntil(last_frame + 1/idle_fps)`. When minimized or occluded, it waits with no timer; `Resized` / `Occluded(false)` request the next frame.
-- **Settings save points**: the drawer closing, the sidebar being hidden, `CloseRequested` (which also calls `remember_window()`), and `exiting`. Saving is atomic: write `.json.tmp`, then rename.
+- **Settings save points**: the drawer closing, the sidebar being hidden, hiding to the tray (`hide_to_tray`, which the close button calls; it also calls `remember_window()`), Quit from the tray, a mode change, and `exiting`. Saving is atomic: write `.json.tmp`, then rename.
 - `trim_at` schedules `sys::trim_working_set()` a few seconds after startup and mode changes. It's a cosmetic memory-footprint measure.
 
 ### 3.3 Window modes and input (`main.rs`)
 
 - **Windowed** shows the sidebar and decorations. **Fullscreen** is `Fullscreen::Borderless`, hides the sidebar, and hides the cursor after 2.5 s without movement.
 - The swapchain is an ordinary opaque HWND flip-model swapchain (wgpu's DX12 default).
+- **The tray** (`tray.rs`, `App::tray_cmd`):
+  - `hide_to_tray` saves, ends any dock fade and hides the window (`tray_hidden`). While hidden, `dock_sync` does nothing and `schedule` waits with no timer.
+  - `show_from_tray` brings the window back from anywhere, including from being minimized or gone with Spotify. A panel gone with a minimized Spotify restores Spotify and re-docks. One gone because Spotify closed floats.
+  - A tray click hides the window if it's on screen and had focus within the last 600 ms (clicking the tray takes the focus first). Otherwise it shows the window.
+  - Choosing a mode from the tray menu shows the window, then calls `set_docking`, which is shared with the Dock / Undock actions.
+  - If Windows won't add the icon (`App::tray` is `None`), the close button quits as before.
 - There are no keyboard shortcuts, by the user's choice: the app ignores key presses outside egui's own text fields. Everything is reached with the mouse (sidebar, drawer, on-scene buttons). Don't add hotkeys unless the user asks.
 - Double-click on the scene, outside any UI area, toggles fullscreen (`MouseInput` plus `scene_px`).
 - **Docking** (`dock.rs`, `App::dock_sync`): with `settings.dock` set, `dock::Tracker` finds Spotify's main window (a shown, unowned `Chrome_WidgetWin_1` with a title, owned by `Spotify.exe`, which covers both the spotify.com and Microsoft Store installs) and hooks location, minimize, foreground, destroy, show and hide events on its process. `dock_sync` then:
@@ -150,7 +160,7 @@ Key facts:
   - keeps the panel directly above Spotify in the z-order on every sync, without activating it (`dock::stack_above`), so it's in front whenever Spotify is, including right after docking from the background; focusing the panel puts Spotify right under it.
   - while not following a window, `frame()` asks the tracker again, which searches at most every 2 s. A change to the `DockKey` (dock settings, panel width, mode) also re-docks.
   - when Spotify closes (or goes to the tray), docking stays on and the panel re-docks when Spotify reopens. Meanwhile it floats back to a normal window, or, with `dock_closed` set to hide, goes away the way it does with a minimized Spotify (`App::dock_away`: fade out, hide, `minimized_with`) and fades back in beside the reopened window. Only a panel that was docked hides, so launching while Spotify is closed still shows a window. A killed or crashed Spotify may send no destroy event, so `Tracker::lost()` is checked every frame, and every 2 s while the panel is hidden (`schedule` / `new_events`), since hidden windows render no frames; that same timer looks for a reopened Spotify while the panel is hidden.
-  - a second launch shows a hidden panel (`already_running`), and `Focused(true)` on a panel that had gone away (with no fade running) undocks it to a normal window. A panel hidden with no taskbar button has no other way back without Spotify.
+  - a second launch shows a hidden panel (`already_running`), and `Focused(true)` on a panel that had gone away (with no fade running) undocks it to a normal window. Otherwise, a panel hidden with no taskbar button comes back through the tray icon or with Spotify.
   - the on-scene dock toggle (`overlay::window_buttons`, windowed mode only) is a labelled button: a Spotify-green **Dock to Spotify** (`UiAction::Dock`, sets `dock` to `dock_last`), a plain **Undock** when docked, or a softer green **Waiting for Spotify** while docking is on without a dock (`UiAction::Undock`, which remembers the side in `dock_last`). Both save. Its icons (`Icon::Dock` / `Icon::Undock`) are mirrored for the left side.
   - while the docked panel is on screen in windowed mode, Show sidebar moves out of the top-right pill to its own bottom-left pill (`overlay::show_sidebar_button`), the same corner as the sidebar's Hide sidebar.
   - while the docked panel is on screen in windowed mode, the sidebar's now-playing card, the volume bar and the timeline are left out (`dock_edge` in the UI, `beside_spotify` in `App::frame`), since Spotify's own controls are beside it. They come back undocked, floated or in fullscreen.
@@ -500,6 +510,7 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 | Change volume control | `src/volume.rs` (worker), `ui/overlay.rs` `volume_bar`, `wake.rs` (slider widget) |
 | Change window modes, mouse input or frame pacing | `src/main.rs` |
 | Change docking beside Spotify | `src/dock.rs` (finding and following the window, Win32 placement), `App::dock_sync` in `src/main.rs` (what goes where) |
+| Change the tray icon, its menu or close-to-tray | `src/tray.rs` (icon, menu, hidden window), `App::tray_cmd` / `hide_to_tray` / `show_from_tray` in `src/main.rs` |
 | Change CPU/RAM stats or working-set trimming | `src/sys.rs` |
 | Change update checks, download or the exe swap | `src/update.rs`, the release workflow in `.github/workflows/release.yml` |
 | Change the sidebar or drawer | `src/ui/sidebar.rs`, `src/ui/drawer.rs` |
@@ -524,8 +535,8 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 - **Running the app touches real state**: the settings file, the system volume (if you exercise the volume bar), and the user's media playback (transport commands). Use a scratch `APPDATA`, and don't send media or volume commands without the user's say-so.
 - **The updater and dev builds**: dev builds skip the launch check (unless `BLAZE_UPDATE_URL` is set), so running from `target/` never replaces that exe unasked. Check now and Install still work in a dev build and *will* replace the exe you're running, so test installs on a copy in a scratch folder.
 - **Release asset names are an API**: the updater looks for `blazeaudio.exe` and `blazeaudio.exe.sha256` (`<hex>  blazeaudio.exe`) on the latest non-prerelease release, and compares its `vX.Y.Z` tag with `CARGO_PKG_VERSION`. Renaming either asset or the repo breaks updates for every installed copy.
-- **Docking moves real windows**: running the app with docking on moves your window next to the user's actual Spotify and changes Spotify's z-order. Never move, resize or minimize the user's Spotify window to test it; ask them to click through those cases.
-- **Dock feedback loops**: `dock::place` skips `SetWindowPos` when the window is already there, and the hook callback only queues one `Wake` until it's handled. Keep both, or a Spotify drag floods the loop with events.
+- **Docking moves real windows**: running the app with docking on moves your window next to the user's actual Spotify and changes Spotify's z-order. Docking is the default, so a scratch `APPDATA` with no settings file docks too; seed it with `{"dock":"Off"}` while the user's Spotify is open. Never move, resize or minimize the user's Spotify window to test it; ask them to click through those cases.
+- **Dock feedback loops**: `dock::place` skips `SetWindowPos` when the window is already there, and the hook callback only queues one `UserEvent::Dock` until it's handled. Keep both, or a Spotify drag floods the loop with events.
 - **Line endings**: the repo stores LF, with `core.autocrlf=true` on this machine. Git's LF→CRLF warnings on commit are expected and harmless.
 
 ---
