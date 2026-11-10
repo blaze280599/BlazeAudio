@@ -23,7 +23,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
-use winit::platform::windows::WindowAttributesExtWindows;
+use winit::platform::windows::{WindowAttributesExtWindows, WindowExtWindows};
 use winit::window::{Fullscreen, Icon, ResizeDirection, Window, WindowId};
 
 use audio::{AudioEngine, AudioParams};
@@ -105,7 +105,7 @@ fn already_running(wait: bool) -> bool {
 /// Sets the title-bar and taskbar icons from the exe's icon resource (see build.rs) at the
 /// window's DPI; Windows picks the closest size in the icon group.
 fn set_icons(w: &Window) {
-    use winit::platform::windows::{IconExtWindows, WindowExtWindows};
+    use winit::platform::windows::IconExtWindows;
     let icon = |pt: f64| {
         let n = (pt * w.scale_factor()).round() as u32;
         Icon::from_resource(1, Some(PhysicalSize::new(n, n))).ok()
@@ -355,12 +355,15 @@ impl App {
             self.dock_status = "Waiting for Spotify. The panel docks once its window is open.";
             return;
         };
+        // The panel goes down with Spotify and comes back up with it, even if it was minimized on
+        // its own first. It hides rather than minimizes: with no taskbar button, a minimized
+        // window would be parked as a stub title bar in a corner of the desktop.
         if t.minimized {
-            if let Some(d) = &mut self.docked {
-                if !d.minimized_with && !d.hidden && w.is_minimized() != Some(true) {
-                    dock::minimize(ours);
-                    d.minimized_with = true;
+            if let Some(d) = self.docked.as_mut().filter(|d| !d.hidden && !d.minimized_with) {
+                if w.is_minimized() != Some(true) {
+                    dock::hide(ours);
                 }
+                d.minimized_with = true;
             }
             return;
         }
@@ -392,6 +395,8 @@ impl App {
         let Some(d) = &mut self.docked else { return };
         if d.minimized_with || d.hidden {
             dock::show(ours);
+            // Showing a window again can bring its taskbar button back.
+            w.set_skip_taskbar(true);
             (d.minimized_with, d.hidden) = (false, false);
             w.request_redraw();
         }
@@ -412,7 +417,8 @@ impl App {
         self.dock_status = "Docked. Drag the panel's outer edge to resize it.";
     }
 
-    /// Starts docking: remembers where the window floats and drops its frame.
+    /// Starts docking: remembers where the window floats, drops its frame and its taskbar button
+    /// (the panel is part of Spotify now).
     fn begin_dock(&mut self, w: &Window) {
         if w.is_maximized() {
             w.set_maximized(false);
@@ -420,6 +426,7 @@ impl App {
         let pos = w.outer_position().unwrap_or_default();
         self.docked = Some(Docked { float: (pos, w.inner_size()), side: self.settings.dock, minimized_with: false, hidden: false });
         w.set_decorations(false);
+        w.set_skip_taskbar(true);
         if let Some(ours) = dock::hwnd(w) {
             dock::round_corners(ours, true);
         }
@@ -436,6 +443,7 @@ impl App {
             dock::round_corners(ours, false);
         }
         g.window.set_decorations(true);
+        g.window.set_skip_taskbar(false);
         if self.mode == WindowMode::Windowed {
             g.window.set_outer_position(d.float.0);
             let _ = g.window.request_inner_size(d.float.1);
@@ -744,6 +752,18 @@ impl App {
             match a {
                 ui::UiAction::SetMode(m) => self.apply_mode(m),
                 ui::UiAction::HideSidebar => self.set_sidebar_visible(false),
+                ui::UiAction::ShowSidebar => self.set_sidebar_visible(true),
+                ui::UiAction::Dock => {
+                    self.settings.dock = if self.settings.dock_last == DockSide::Off { DockSide::Right } else { self.settings.dock_last };
+                    self.settings.save();
+                }
+                ui::UiAction::Undock => {
+                    if self.settings.dock != DockSide::Off {
+                        self.settings.dock_last = self.settings.dock;
+                    }
+                    self.settings.dock = DockSide::Off;
+                    self.settings.save();
+                }
                 ui::UiAction::Media(cmd) => self.media.send(cmd),
                 ui::UiAction::Update(cmd) => self.updater.send(cmd),
                 ui::UiAction::Restart => {
@@ -769,7 +789,9 @@ impl App {
             self.dock_key = None;
         }
         if !self.dock_resizing
-            && (self.dock_key != Some(self.dock_key()) || (self.settings.dock != DockSide::Off && self.mode == WindowMode::Windowed && !self.dock.following()))
+            && (self.dock_key != Some(self.dock_key())
+                || (self.settings.dock != DockSide::Off && self.mode == WindowMode::Windowed && !self.dock.following())
+                || self.dock.lost())
         {
             self.dock_sync();
         }
@@ -787,7 +809,13 @@ impl App {
 
     fn schedule(&mut self, el: &ActiveEventLoop) {
         let Some(g) = &self.gfx else { return };
-        if self.minimized || self.occluded {
+        // Hidden along with Spotify counts as minimized.
+        let docked_away = self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with);
+        if docked_away {
+            // Nothing to draw, but check now and then that Spotify is still there: if it was killed
+            // without a destroy event, nothing else would bring the panel back.
+            el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(2)));
+        } else if self.minimized || self.occluded {
             // Nothing to draw; restoring the window (Resized / Occluded) requests the next frame.
             el.set_control_flow(ControlFlow::Wait);
         } else if self.idle {
@@ -880,7 +908,12 @@ impl ApplicationHandler<dock::Wake> for App {
 
     fn new_events(&mut self, el: &ActiveEventLoop, cause: StartCause) {
         if let StartCause::ResumeTimeReached { .. } = cause {
-            if self.minimized || self.occluded {
+            if self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with) {
+                if self.dock.lost() {
+                    self.dock_sync();
+                }
+                self.schedule(el);
+            } else if self.minimized || self.occluded {
                 self.schedule(el);
             } else if let Some(g) = &self.gfx {
                 g.window.request_redraw();
@@ -903,7 +936,17 @@ impl ApplicationHandler<dock::Wake> for App {
                 el.exit();
             }
             WindowEvent::Resized(size) => {
+                let was_minimized = self.minimized;
                 self.minimized = size.width == 0 || size.height == 0;
+                // Restored while docked: Spotify may have moved meanwhile, so re-dock. Brought back
+                // by hand (Win+Shift+M, say) while Spotify is still minimized: bring Spotify back too,
+                // or the re-dock would send the panel straight back down.
+                if was_minimized && !self.minimized && self.docked.is_some() {
+                    self.dock_key = None;
+                    if let Some(t) = self.dock.current().filter(|t| dock::info(*t).is_some_and(|i| i.minimized)) {
+                        dock::show(t);
+                    }
+                }
                 // Dragging the docked panel's edge: the scene takes the new width.
                 if self.dock_resizing && !self.minimized {
                     if let Some(g) = &self.gfx {

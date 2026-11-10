@@ -14,6 +14,11 @@ pub(super) enum Icon {
     Expand,
     Close,
     HideSidebar,
+    ShowSidebar,
+    /// A window with a side panel attached; mirrored for the left side.
+    Dock { left: bool },
+    /// The same panel pulled away from the window.
+    Undock { left: bool },
     Reset,
     Fullscreen,
     Speaker,
@@ -96,6 +101,26 @@ pub(super) fn paint_icon(p: &egui::Painter, icon: Icon, c: Pos2, col: Color32) {
             line(v(-3.0, -6.5), v(-3.0, 6.5));
             line(v(3.5, -3.0), v(1.0, 0.0));
             line(v(1.0, 0.0), v(3.5, 3.0));
+        }
+        Icon::Dock { left } | Icon::Undock { left } => {
+            let sx = if left { -1.0 } else { 1.0 };
+            let r = |x0: f32, y0: f32, x1: f32, y1: f32| Rect::from_two_pos(c + v(x0 * sx, y0), c + v(x1 * sx, y1));
+            if matches!(icon, Icon::Dock { .. }) {
+                // Panel flush against the window, solid: attached.
+                p.rect_stroke(r(-8.0, -6.5, 1.0, 6.5), CornerRadius::same(2), s, StrokeKind::Middle);
+                p.rect_filled(r(1.0, -6.5, 8.5, 6.5), CornerRadius::same(2), col);
+            } else {
+                // Panel outlined and apart from the window: detached.
+                p.rect_stroke(r(-8.0, -6.5, 1.5, 6.5), CornerRadius::same(2), s, StrokeKind::Middle);
+                p.rect_stroke(r(4.5, -4.5, 8.5, 4.5), CornerRadius::same(1), s, StrokeKind::Middle);
+            }
+        }
+        Icon::ShowSidebar => {
+            // The same panel with its left pane opening out.
+            p.rect_stroke(Rect::from_center_size(c, v(16.0, 13.0)), CornerRadius::same(2), s, StrokeKind::Middle);
+            line(v(-3.0, -6.5), v(-3.0, 6.5));
+            line(v(1.0, -3.0), v(3.5, 0.0));
+            line(v(3.5, 0.0), v(1.0, 3.0));
         }
         Icon::Reset => {
             // Circular arrow, most of a turn, head at the open end.

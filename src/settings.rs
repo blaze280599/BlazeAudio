@@ -107,6 +107,8 @@ pub struct Settings {
     pub window: Option<WindowGeom>,
 
     pub dock: DockSide,
+    /// The side docking last used, for the on-scene Dock button.
+    pub dock_last: DockSide,
     /// Width of the docked panel's scene in points; an open sidebar and drawer add to it.
     pub dock_width: f32,
     pub dock_full: DockFull,
@@ -144,6 +146,7 @@ impl Default for Settings {
             updates: UpdateMode::Auto,
             window: None,
             dock: DockSide::Off,
+            dock_last: DockSide::Right,
             dock_width: 440.0,
             dock_full: DockFull::Float,
         }

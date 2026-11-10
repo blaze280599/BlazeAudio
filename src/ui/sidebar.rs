@@ -44,7 +44,8 @@ impl UiState {
             if nav_item(ui, t, icon, label, false, expanded).clicked() {
                 c.settings.sidebar_expanded = !expanded;
             }
-            if c.mode != WindowMode::Windowed && nav_item(ui, t, Icon::HideSidebar, "Hide sidebar", false, expanded).on_hover_text("F1").clicked() {
+            // Fullscreen and a docked panel are for the visuals; elsewhere the sidebar stays put.
+            if (c.mode != WindowMode::Windowed || c.dock_edge.is_some()) && nav_item(ui, t, Icon::HideSidebar, "Hide sidebar", false, expanded).on_hover_text("F1").clicked() {
                 actions.push(UiAction::HideSidebar);
             }
             ui.add_space(6.0);

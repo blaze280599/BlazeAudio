@@ -146,10 +146,12 @@ Key facts:
 - Double-click on the scene, outside any UI area, toggles fullscreen (`MouseInput` plus `scene_px`).
 - **Docking** (`dock.rs`, `App::dock_sync`): with `settings.dock` set, `dock::Tracker` finds Spotify's main window (a shown, unowned `Chrome_WidgetWin_1` with a title, owned by `Spotify.exe`, which covers both the spotify.com and Microsoft Store installs) and hooks location, minimize, foreground, destroy, show and hide events on its process. `dock_sync` then:
   - places the window flush against Spotify's visible bounds (DWM extended frame bounds, not `GetWindowRect`), frameless with DWM-rounded corners (`dock::round_corners`, reset on undock), at Spotify's height and `dock_width` points wide plus `ui::panels_width` for an open sidebar and drawer, so those widen the panel outward. It switches sides when the chosen one would be mostly off the monitor's work area.
-  - minimizes along with Spotify and comes back with it (`minimized_with`). When the user minimizes the panel themselves, it stays down.
+  - drops the taskbar button while docked (`set_skip_taskbar`, re-applied after every show because the shell can add it back), so it hides rather than minimizes along with Spotify (`minimized_with`): a minimized window without a taskbar button is parked as a stub title bar. It comes back with Spotify even if the panel was minimized on its own first. Restoring the panel by hand (Win+Shift+M) while Spotify is minimized restores Spotify too (`Resized` handler), or the re-dock would send the panel straight back down.
   - when Spotify is maximized or covers its monitor, floats back to the pre-dock rect or hides, per `dock_full`.
   - raises the panel without activating it when Spotify comes to the front; focusing the panel puts Spotify right under it.
   - while not following a window, `frame()` asks the tracker again, which searches at most every 2 s. A change to the `DockKey` (dock settings, panel width, mode) also re-docks.
+  - when Spotify closes, the panel floats back to a normal window and docking stays on, so it re-docks when Spotify reopens. A killed or crashed Spotify may send no destroy event, so `Tracker::lost()` is checked every frame, and every 2 s while the panel is hidden (`schedule` / `new_events`), since hidden windows render no frames.
+  - the on-scene dock toggle (`overlay::window_buttons`, windowed mode only) is a labelled button: a Spotify-green **Dock to Spotify** (`UiAction::Dock`, sets `dock` to `dock_last`), a plain **Undock** when docked, or a softer green **Waiting for Spotify** while docking is on without a dock (`UiAction::Undock`, which remembers the side in `dock_last`). Both save. Its icons (`Icon::Dock` / `Icon::Undock`) are mirrored for the left side.
   - Fullscreen suspends docking and leaves the window docked underneath. `remember_window()` saves the pre-dock rect, never the docked one.
   - The frameless window has no resize border, so `overlay::dock_grip` is an egui strip on the outer edge that sends `UiAction::DockResize`; the app calls `drag_resize_window`, and `Resized` updates `dock_width` until the left button is up.
 - Window geometry: `remember_window()` stores the restored windowed rect and the maximized flag in `settings.window`. On startup it's reused only if the title bar lands on a connected monitor.
@@ -205,23 +207,23 @@ Each hop does the following:
 
 The UI is **egui**, in immediate mode, redrawn every frame it runs.
 
-- **Contract**: `UiState::draw(ctx, UiCtx) -> (Vec<UiAction>, Rect)`. `UiCtx` carries `&mut Settings` (edited in place) plus read-only state: track, vis, palette, mode, stats, fade alphas, update status, and so on. Anything that isn't a setting is requested with a `UiAction` (`SetMode`, `HideSidebar`, `Media(MediaCmd)`, `Update(UpdateCmd)`, `Restart`, `DockResize`) and applied by `App::frame` after rendering. The UI never holds references to `App`, `Gpu` or workers, except `&Volume`, whose setters only send on a channel.
+- **Contract**: `UiState::draw(ctx, UiCtx) -> (Vec<UiAction>, Rect)`. `UiCtx` carries `&mut Settings` (edited in place) plus read-only state: track, vis, palette, mode, stats, fade alphas, update status, and so on. Anything that isn't a setting is requested with a `UiAction` (`SetMode`, `HideSidebar`, `ShowSidebar`, `Dock`, `Undock`, `Media(MediaCmd)`, `Update(UpdateCmd)`, `Restart`, `DockResize`) and applied by `App::frame` after rendering. The UI never holds references to `App`, `Gpu` or workers, except `&Volume`, whose setters only send on a channel.
 - The returned `Rect`, in points, is the area left for the scene once the side panels have taken their space.
 
 | File | Contents |
 |---|---|
 | `mod.rs` | `UiAction`, `Section` + `SECTIONS`, `UiState`, `UiCtx`, `draw()` (panel layout, stacking of on-scene elements), `panels_width` (what the sidebar and drawer add to a docked panel) |
 | `theme.rs` | `Tokens` (neutral colours per `UiTheme`), `tokens()`, `with_alpha`, `to_c32` (linear → sRGB `Color32`), `UiState::style` (egui style, rebuilt only when the theme changes) |
-| `widgets.rs` | `knob` (slider with a label row, reset-to-default and double-click reset), `choice` (segmented control with label and reset), `segmented`, `heading`, `nav_item`, `icon_button`, `spectrum_meter`, `Fmt` / `num()` / `PCT` value formatting |
+| `widgets.rs` | `knob` (slider with a label row, reset-to-default and double-click reset), `choice` (segmented control with label and reset), `segmented`, `heading`, `nav_item`, `icon_button`, `labeled_icon_button` (icon plus a short label, optionally tinted, for on-scene controls that must explain themselves), `spectrum_meter`, `Fmt` / `num()` / `PCT` value formatting |
 | `icons.rs` | `Icon` enum + `paint_icon` (about 16 pt line icons drawn with egui shapes) |
 | `playback.rs` | `seek_bar` (sidebar click-to-jump, or on-scene drag/scroll scrubbing), `time_bubble`, `transport`, `fmt_time` |
 | `sidebar.rs` | Logo, section list, collapse/hide, now-playing card (art, title, seek bar, transport, spectrum) |
 | `drawer.rs` | Drawer shell, Visuals footer (Randomize / Undo / Reset, undo depth 32), and one function per section: `visuals`, `audio`, `palette`, `general` (method; owns the reset confirm), `hotkeys`; also `palette_row`, `key_row`, `theme_card` |
-| `overlay.rs` | `stats_hud`, `toast`, `empty_hint` ("Nothing playing" / "No output device" in the toast's place), `window_buttons`, `volume_bar` (uses `wake::WakeSlider`), `timeline`, `dock_grip` (the docked panel's resize edge) |
+| `overlay.rs` | `stats_hud`, `toast`, `empty_hint` ("Nothing playing" / "No output device" in the toast's place), `window_buttons` (show-sidebar while it's hidden, the Dock / Undock / Waiting toggle, fullscreen), `volume_bar` (uses `wake::WakeSlider`), `timeline`, `dock_grip` (the docked panel's resize edge) |
 
 UI conventions:
 
-- **Colours come from `Tokens`.** Don't hard-code greys. Album colours appear only as data (spectrum, swatches, the accent on the volume-bar crest). Elements floating over the scene use `ft` (forced dark tokens) even in the light theme, because they sit on dark visuals.
+- **Colours come from `Tokens`.** Don't hard-code greys. Album colours appear only as data (spectrum, swatches, the accent on the volume-bar crest). The one fixed brand colour is `theme::SPOTIFY_GREEN`, used only on the dock toggle; Spotify's logo is deliberately not drawn (trademark), the name and colour carry it. Elements floating over the scene use `ft` (forced dark tokens) even in the light theme, because they sit on dark visuals.
 - Every numeric setting goes through `knob` and every enum setting through `choice`, with the default taken from `Settings::default()` (or the scene settings' `Default`). That's what gives per-setting reset, default tooltips and consistent formatting. Use `PCT` for 0..1 values and `num(decimals, " unit")` otherwise, adding `.log()` for logarithmic ranges.
 - An `egui::Area` remembers its size from earlier frames. If its content width changes (a new track title, say), give it an id that changes with the content. The toast does this.
 - The drawer is a fixed 300 pt wide. Controls must fit: `knob` sizes its slider to the row width minus a 72 pt value box. Keep labels short.
@@ -519,6 +521,7 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 - **Name collisions** with `common.wgsl`: a scene shader can't define `G`, `A`, `P` (except its own `Params`), `vs_full`, `VsOut`, `hash11`, `band`, `pal`, `luma`, `crt_curve` and so on.
 - **`SceneId::ALL` order** sets the number keys and the startup default (`ALL[0]`). Reordering changes what users' keys do.
 - **egui `Area` sizing**: an Area keeps its previous size, so content that grows wraps or clips unless the Area's id changes.
+- **Interactive Areas at the window edge**: egui pushes an Area back on screen by default (`constrain`), and an Area whose content is placed with `allocate_rect` at absolute coordinates can end up with a hit rect far bigger than it looks. An invisible foreground Area like `dock_grip` then swallows every click under it. Use `.constrain(false)` and `allocate_exact_size`.
 - **Main-thread blocking**: a COM or WinRT call on the main thread (media control, volume) can stall frames for tens of milliseconds. Always go through the worker's channel.
 - **`panic = "abort"`** in release: a panic anywhere ends the process. Prefer `Option` and `let Some(..) else` over `unwrap()` in new code.
 - **Settings compatibility**: renaming a field, enum variant or `SceneId` resets users' saved values unless you migrate (§3.8).

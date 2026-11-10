@@ -19,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic,
     IsWindow, IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow, CHILDID_SELF, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE,
     EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, GWL_EXSTYLE, GW_OWNER, HWND_TOP, OBJID_WINDOW,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WINEVENT_OUTOFCONTEXT,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINEVENT_OUTOFCONTEXT,
     WS_EX_TOOLWINDOW,
 };
 use winit::event_loop::EventLoopProxy;
@@ -119,6 +119,12 @@ impl Tracker {
 
     pub fn following(&self) -> bool {
         self.target.is_some()
+    }
+
+    /// The followed window closed or hid without an event reaching the hooks (Spotify killed or
+    /// crashed, say). Cheap enough to ask every frame.
+    pub fn lost(&self) -> bool {
+        self.target.is_some_and(|h| unsafe { !IsWindow(Some(h)).as_bool() || !IsWindowVisible(h).as_bool() })
     }
 
     /// Stops following: unhooks and forgets the window. Looks again on the next `target()`.
@@ -235,22 +241,17 @@ pub fn round_corners(ours: HWND, round: bool) {
     }
 }
 
-pub fn minimize(ours: HWND) {
-    unsafe {
-        let _ = ShowWindow(ours, SW_SHOWMINNOACTIVE);
-    }
-}
-
 pub fn hide(ours: HWND) {
     unsafe {
         let _ = ShowWindow(ours, SW_HIDE);
     }
 }
 
-/// Shows (and un-minimizes) `ours` without taking focus from Spotify.
-pub fn show(ours: HWND) {
+/// Shows (and un-minimizes) a window without activating it: the panel without taking focus
+/// from Spotify, or Spotify when the panel is brought back by hand.
+pub fn show(h: HWND) {
     unsafe {
-        let _ = ShowWindow(ours, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
     }
 }
 

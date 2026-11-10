@@ -38,6 +38,11 @@ const DRAWER_W: f32 = 300.0;
 pub enum UiAction {
     SetMode(WindowMode),
     HideSidebar,
+    ShowSidebar,
+    /// Turns docking to Spotify on, on the side it last used (the on-scene button).
+    Dock,
+    /// Turns docking to Spotify off (the on-scene button).
+    Undock,
     Media(MediaCmd),
     Update(UpdateCmd),
     /// Close and start the exe on disk (the new version after an update).

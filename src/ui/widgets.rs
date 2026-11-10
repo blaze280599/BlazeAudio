@@ -3,7 +3,7 @@
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, RichText, Sense, Vec2};
 
 use super::icons::{paint_icon, Icon};
-use super::theme::Tokens;
+use super::theme::{with_alpha, Tokens};
 use crate::vis::VisState;
 
 /// One sidebar row: icon, plus a label when expanded (a tooltip stands in for it on the rail).
@@ -34,6 +34,33 @@ pub(super) fn icon_button(ui: &mut egui::Ui, t: &Tokens, icon: Icon, size: f32) 
         ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
     }
     paint_icon(ui.painter(), icon, rect.center(), if hovered { t.text } else { t.dim });
+    resp
+}
+
+/// An icon with a short label after it, for an on-scene control that has to explain itself
+/// (the dock toggle). With `tint`, it's drawn in that colour on a wash of it (`fill` alpha,
+/// stronger on hover), so it stands out from the plain icon buttons beside it.
+pub(super) fn labeled_icon_button(ui: &mut egui::Ui, t: &Tokens, icon: Icon, label: &str, tint: Option<(Color32, u8)>) -> egui::Response {
+    let font = egui::FontId::proportional(13.0);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, t.text);
+    let size = Vec2::new(26.0 + galley.size().x + 10.0, 26.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = resp.hovered();
+    let col = match tint {
+        Some((c, fill)) => {
+            let a = if hovered { fill.saturating_add(40) } else { fill };
+            ui.painter().rect_filled(rect, CornerRadius::same(13), with_alpha(c, a));
+            c
+        }
+        None => {
+            if hovered {
+                ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
+            }
+            if hovered { t.text } else { t.dim }
+        }
+    };
+    paint_icon(ui.painter(), icon, egui::pos2(rect.left() + 13.0, rect.center().y), col);
+    ui.painter().galley_with_override_text_color(egui::pos2(rect.left() + 26.0, rect.center().y - galley.size().y / 2.0), galley, col);
     resp
 }
 

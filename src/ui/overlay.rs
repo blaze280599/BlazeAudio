@@ -5,8 +5,8 @@ use egui::{Align2, Color32, CornerRadius, Margin, Rect, RichText, Sense, Stroke,
 
 use super::icons::{paint_icon, Icon};
 use super::playback::seek_bar;
-use super::theme::Tokens;
-use super::widgets::icon_button;
+use super::theme::{Tokens, SPOTIFY_GREEN};
+use super::widgets::{icon_button, labeled_icon_button};
 use super::{UiAction, UiCtx, UiState};
 use crate::settings::{DockSide, WindowMode};
 use crate::wake::WakeStyle;
@@ -203,8 +203,11 @@ pub(super) fn dock_grip(ctx: &egui::Context, edge: DockSide, actions: &mut Vec<U
     let full = ctx.content_rect();
     let x = if edge == DockSide::Left { full.left() } else { full.right() - W };
     let rect = Rect::from_min_size(egui::pos2(x, full.top()), egui::vec2(W, full.height()));
-    egui::Area::new(egui::Id::new("dock-grip")).order(egui::Order::Foreground).fixed_pos(rect.min).show(ctx, |ui| {
-        let resp = ui.allocate_rect(rect, Sense::click_and_drag());
+    // Sized by what it allocates and never pushed back on screen: a constrained Area at the
+    // right edge gets shifted left and its hit rect then covers the controls beside it.
+    let area = egui::Area::new(egui::Id::new("dock-grip")).order(egui::Order::Foreground).fixed_pos(rect.min).constrain(false);
+    area.show(ctx, |ui| {
+        let (_, resp) = ui.allocate_exact_size(rect.size(), Sense::click_and_drag());
         if resp.hovered() || resp.dragged() {
             ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
@@ -221,13 +224,58 @@ pub(super) fn window_buttons(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &To
         .corner_radius(CornerRadius::same(18))
         .inner_margin(Margin::symmetric(6, 4));
 
-    egui::Area::new(egui::Id::new("window-buttons"))
+    // The dock toggle: Dock when off, Undock when docked, and Waiting (lit) while docking is on
+    // but there's no Spotify window to dock to or no room beside it. Fullscreen suspends docking,
+    // so it isn't offered there.
+    let windowed = c.mode == WindowMode::Windowed;
+    let last = if c.settings.dock_last == DockSide::Off { DockSide::Right } else { c.settings.dock_last };
+    let dock_state = match (c.settings.dock, c.dock_edge) {
+        (DockSide::Off, _) => 0,
+        (_, Some(_)) => 1,
+        _ => 2,
+    };
+    // The id follows the buttons and labels, so the Area doesn't keep a narrower size.
+    egui::Area::new(egui::Id::new(("window-buttons", c.show_sidebar, windowed, dock_state)))
         .pivot(Align2::RIGHT_TOP)
         .fixed_pos(scene.right_top() + egui::vec2(-12.0, 12.0))
         .show(ctx, |ui| {
             ui.multiply_opacity(c.controls_alpha);
             frame.show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    if !c.show_sidebar && icon_button(ui, t, Icon::ShowSidebar, 26.0).on_hover_text("Show sidebar (Tab)").clicked() {
+                        actions.push(UiAction::ShowSidebar);
+                    }
+                    if windowed {
+                        // Green while it's an invitation (Dock) or in progress (Waiting); plain once
+                        // docked, where Undock is just a way back out.
+                        let side = if last == DockSide::Left { "left" } else { "right" };
+                        let (icon, label, tip, tint, action) = match dock_state {
+                            0 => (
+                                Icon::Dock { left: last == DockSide::Left },
+                                "Dock to Spotify",
+                                format!("Sticks this window to the {side} of Spotify's window, at its height, and follows it around. Side and width are in General."),
+                                Some((SPOTIFY_GREEN, 40)),
+                                UiAction::Dock,
+                            ),
+                            1 => (
+                                Icon::Undock { left: c.dock_edge == Some(DockSide::Left) },
+                                "Undock",
+                                "Back to a normal window, where it was before docking.".to_owned(),
+                                None,
+                                UiAction::Undock,
+                            ),
+                            _ => (
+                                Icon::Dock { left: c.settings.dock == DockSide::Left },
+                                "Waiting for Spotify",
+                                format!("{} Click to turn docking off.", c.dock_status),
+                                Some((SPOTIFY_GREEN, 18)),
+                                UiAction::Undock,
+                            ),
+                        };
+                        if labeled_icon_button(ui, t, icon, label, tint).on_hover_text(tip).clicked() {
+                            actions.push(action);
+                        }
+                    }
                     let fs = c.mode == WindowMode::Fullscreen;
                     let tip = if fs { "Exit fullscreen (F11)" } else { "Fullscreen (F11)" };
                     if icon_button(ui, t, Icon::Fullscreen, 26.0).on_hover_text(tip).clicked() {

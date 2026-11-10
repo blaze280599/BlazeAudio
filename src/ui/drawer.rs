@@ -102,6 +102,9 @@ impl UiState {
         let sides = [(DockSide::Off, "Off"), (DockSide::Left, "Left"), (DockSide::Right, "Right")];
         choice(ui, t, "Side", &mut s.dock, d.dock, &sides);
         if s.dock != DockSide::Off {
+            s.dock_last = s.dock;
+        }
+        if s.dock != DockSide::Off {
             knob(ui, t, "Panel width", &mut s.dock_width, d.dock_width, 320.0..=1600.0, num(0, " px"));
             let fulls = [(DockFull::Float, "Float"), (DockFull::Hide, "Hide")];
             choice(ui, t, "When Spotify is maximized", &mut s.dock_full, d.dock_full, &fulls);
@@ -158,14 +161,14 @@ impl UiState {
                     ui.horizontal(|ui| {
                         if ui.button("Reset").clicked() {
                             let (mode, expanded, theme, updates, window) = (s.start_mode, s.sidebar_expanded, s.theme, s.updates, s.window);
-                            let (dock, dock_width, dock_full) = (s.dock, s.dock_width, s.dock_full);
+                            let (dock, dock_last, dock_width, dock_full) = (s.dock, s.dock_last, s.dock_width, s.dock_full);
                             *s = Settings::default();
                             s.start_mode = mode;
                             s.sidebar_expanded = expanded;
                             s.theme = theme;
                             s.updates = updates;
                             s.window = window;
-                            (s.dock, s.dock_width, s.dock_full) = (dock, dock_width, dock_full);
+                            (s.dock, s.dock_last, s.dock_width, s.dock_full) = (dock, dock_last, dock_width, dock_full);
                             self.confirm_reset = false;
                         }
                         if ui.button("Cancel").clicked() {

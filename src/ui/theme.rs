@@ -67,6 +67,10 @@ pub(super) fn tokens(t: UiTheme) -> Tokens {
     }
 }
 
+/// Spotify's green, for the dock toggle only: with its name on the button, the colour says
+/// "Spotify" at a glance without borrowing its logo.
+pub(super) const SPOTIFY_GREEN: Color32 = Color32::from_rgb(30, 215, 96);
+
 pub(super) fn with_alpha(c: Color32, a: u8) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
 }
