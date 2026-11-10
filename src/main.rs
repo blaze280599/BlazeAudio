@@ -607,8 +607,10 @@ impl App {
         // Resting on the volume bar or timeline keeps the controls up.
         let still = if self.ui.controls_hot { 0.0 } else { self.last_mouse_move.elapsed().as_secs_f32() };
         let controls_alpha = (1.0 - (still - 2.0) / 0.5).clamp(0.0, 1.0);
-        let volume_alpha = if self.settings.show_volume { controls_alpha } else { 0.0 };
-        let has_timeline = self.settings.show_timeline && !self.track.title.is_empty() && self.track.playback.duration > 0.0;
+        // Docked, Spotify's own volume slider and progress bar sit right beside the panel.
+        let beside_spotify = self.mode == WindowMode::Windowed && self.docked.as_ref().is_some_and(|d| !d.hidden);
+        let volume_alpha = if self.settings.show_volume && !beside_spotify { controls_alpha } else { 0.0 };
+        let has_timeline = self.settings.show_timeline && !beside_spotify && !self.track.title.is_empty() && self.track.playback.duration > 0.0;
         let timeline_alpha = if has_timeline { controls_alpha } else { 0.0 };
         // A hint over a silent scene with no track. Without the sidebar it shows only for the
         // first seconds after launch or while the mouse moves, so idle frames stay free of UI.
