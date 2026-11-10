@@ -14,6 +14,7 @@ BlazeAudio is a single-binary Windows music visualizer written in Rust.
 - It **reads now-playing info and album art** from the Windows media session API (GSMTC), so Spotify or a browser shows title, artist and cover. Play, pause, skip and seek go back through the same API.
 - It **renders audio-reactive HDR scenes** with wgpu on DirectX 12, followed by bloom, ACES tonemapping and film effects.
 - It has **two window modes**: windowed with a docked egui sidebar, and borderless fullscreen.
+- It **can dock beside Spotify's window**: a frameless panel that matches Spotify's height and follows it around.
 - It **controls the system output volume** through Core Audio.
 - It **updates itself** from this repo's GitHub releases. It's a portable exe, so the update replaces the exe in place.
 
@@ -99,6 +100,8 @@ Python on this machine may not have PIL, so compare files with `cmp` or a hash r
 | `update` | `update.rs` `worker` | `update::Status` plus a `version` counter | `Updater::version()` / `status()`; `UpdateCmd::{Check, Install}` in through a channel |
 | main (winit) | `main.rs` `App` | Everything else | — |
 
+The dock (`dock.rs`) has no thread of its own. Its WinEvent hooks are out-of-context, so Windows delivers them on the main thread through winit's message pump. The callback only sends a `dock::Wake` user event, and `App::user_event` re-docks.
+
 Rules:
 
 - **The main thread never blocks on a worker.** Workers publish snapshots behind short-lived locks or atomics, and the main thread copies them. Keep it that way: no `join`, no `recv()` without a timeout, no COM calls on the main thread.
@@ -141,6 +144,14 @@ Key facts:
 - `handle_key` ignores Ctrl and Alt combos (except Alt+Enter).
 - Keys: `handle_key` gets presses that aren't repeats, except the arrow keys, which repeat for volume and seek. It skips keys when egui wants the keyboard (a text field is focused) or consumed the event (except F1).
 - Double-click on the scene, outside any UI area, toggles fullscreen (`MouseInput` plus `scene_px`).
+- **Docking** (`dock.rs`, `App::dock_sync`): with `settings.dock` set, `dock::Tracker` finds Spotify's main window (a shown, unowned `Chrome_WidgetWin_1` with a title, owned by `Spotify.exe`, which covers both the spotify.com and Microsoft Store installs) and hooks location, minimize, foreground, destroy, show and hide events on its process. `dock_sync` then:
+  - places the window flush against Spotify's visible bounds (DWM extended frame bounds, not `GetWindowRect`), frameless with DWM-rounded corners (`dock::round_corners`, reset on undock), at Spotify's height and `dock_width` points wide plus `ui::panels_width` for an open sidebar and drawer, so those widen the panel outward. It switches sides when the chosen one would be mostly off the monitor's work area.
+  - minimizes along with Spotify and comes back with it (`minimized_with`). When the user minimizes the panel themselves, it stays down.
+  - when Spotify is maximized or covers its monitor, floats back to the pre-dock rect or hides, per `dock_full`.
+  - raises the panel without activating it when Spotify comes to the front; focusing the panel puts Spotify right under it.
+  - while not following a window, `frame()` asks the tracker again, which searches at most every 2 s. A change to the `DockKey` (dock settings, panel width, mode) also re-docks.
+  - Fullscreen suspends docking and leaves the window docked underneath. `remember_window()` saves the pre-dock rect, never the docked one.
+  - The frameless window has no resize border, so `overlay::dock_grip` is an egui strip on the outer edge that sends `UiAction::DockResize`; the app calls `drag_resize_window`, and `Resized` updates `dock_width` until the left button is up.
 - Window geometry: `remember_window()` stores the restored windowed rect and the maximized flag in `settings.window`. On startup it's reused only if the title bar lands on a connected monitor.
 
 ### 3.4 Rendering (`gpu.rs`, `scenes/`, `shaders/`)
@@ -194,19 +205,19 @@ Each hop does the following:
 
 The UI is **egui**, in immediate mode, redrawn every frame it runs.
 
-- **Contract**: `UiState::draw(ctx, UiCtx) -> (Vec<UiAction>, Rect)`. `UiCtx` carries `&mut Settings` (edited in place) plus read-only state: track, vis, palette, mode, stats, fade alphas, update status, and so on. Anything that isn't a setting is requested with a `UiAction` (`SetMode`, `HideSidebar`, `Media(MediaCmd)`, `Update(UpdateCmd)`, `Restart`) and applied by `App::frame` after rendering. The UI never holds references to `App`, `Gpu` or workers, except `&Volume`, whose setters only send on a channel.
+- **Contract**: `UiState::draw(ctx, UiCtx) -> (Vec<UiAction>, Rect)`. `UiCtx` carries `&mut Settings` (edited in place) plus read-only state: track, vis, palette, mode, stats, fade alphas, update status, and so on. Anything that isn't a setting is requested with a `UiAction` (`SetMode`, `HideSidebar`, `Media(MediaCmd)`, `Update(UpdateCmd)`, `Restart`, `DockResize`) and applied by `App::frame` after rendering. The UI never holds references to `App`, `Gpu` or workers, except `&Volume`, whose setters only send on a channel.
 - The returned `Rect`, in points, is the area left for the scene once the side panels have taken their space.
 
 | File | Contents |
 |---|---|
-| `mod.rs` | `UiAction`, `Section` + `SECTIONS`, `UiState`, `UiCtx`, `draw()` (panel layout, stacking of on-scene elements) |
+| `mod.rs` | `UiAction`, `Section` + `SECTIONS`, `UiState`, `UiCtx`, `draw()` (panel layout, stacking of on-scene elements), `panels_width` (what the sidebar and drawer add to a docked panel) |
 | `theme.rs` | `Tokens` (neutral colours per `UiTheme`), `tokens()`, `with_alpha`, `to_c32` (linear → sRGB `Color32`), `UiState::style` (egui style, rebuilt only when the theme changes) |
 | `widgets.rs` | `knob` (slider with a label row, reset-to-default and double-click reset), `choice` (segmented control with label and reset), `segmented`, `heading`, `nav_item`, `icon_button`, `spectrum_meter`, `Fmt` / `num()` / `PCT` value formatting |
 | `icons.rs` | `Icon` enum + `paint_icon` (about 16 pt line icons drawn with egui shapes) |
 | `playback.rs` | `seek_bar` (sidebar click-to-jump, or on-scene drag/scroll scrubbing), `time_bubble`, `transport`, `fmt_time` |
 | `sidebar.rs` | Logo, section list, collapse/hide, now-playing card (art, title, seek bar, transport, spectrum) |
 | `drawer.rs` | Drawer shell, Visuals footer (Randomize / Undo / Reset, undo depth 32), and one function per section: `visuals`, `audio`, `palette`, `general` (method; owns the reset confirm), `hotkeys`; also `palette_row`, `key_row`, `theme_card` |
-| `overlay.rs` | `stats_hud`, `toast`, `empty_hint` ("Nothing playing" / "No output device" in the toast's place), `window_buttons`, `volume_bar` (uses `wake::WakeSlider`), `timeline` |
+| `overlay.rs` | `stats_hud`, `toast`, `empty_hint` ("Nothing playing" / "No output device" in the toast's place), `window_buttons`, `volume_bar` (uses `wake::WakeSlider`), `timeline`, `dock_grip` (the docked panel's resize edge) |
 
 UI conventions:
 
@@ -225,7 +236,7 @@ UI conventions:
 - `load()` parses into `serde_json::Value`, runs `migrate()`, then deserializes. `migrate()` currently moves legacy flat `ascii_*` and `scope_*` keys into `scenes`. Unit tests next to it cover migration and round-tripping.
 - **Stored names are an API.** The field names and enum variant names in `Settings`, `SceneSettings`, scene `Settings` structs and `SceneId` are what users' files contain. Renaming one silently resets that value for everyone unless you add a migration or `#[serde(alias = "...")]`. There's an example of the alias approach on `scope::Mode::Yt`.
 - "The look" (what Randomize, Reset and Undo touch) is `Settings::copy_look` and `randomize_visuals`: every scene's settings plus the post effects (intensity, bloom, exposure, chromatic, grain, vignette). The current scene and render scale are deliberately excluded.
-- "Reset all settings" (General) keeps theme, start mode, the Updates choice, sidebar size and window geometry.
+- "Reset all settings" (General) keeps theme, start mode, the dock settings, the Updates choice, sidebar size and window geometry.
 
 ### 3.9 Updates (`update.rs`)
 
@@ -490,6 +501,7 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 | Change now-playing, art fetch or transport | `src/media.rs` |
 | Change volume control | `src/volume.rs` (worker), `ui/overlay.rs` `volume_bar`, `wake.rs` (slider widget) |
 | Change window modes, keys or frame pacing | `src/main.rs` |
+| Change docking beside Spotify | `src/dock.rs` (finding and following the window, Win32 placement), `App::dock_sync` in `src/main.rs` (what goes where) |
 | Change CPU/RAM stats or working-set trimming | `src/sys.rs` |
 | Change update checks, download or the exe swap | `src/update.rs`, the release workflow in `.github/workflows/release.yml` |
 | Change the sidebar or drawer | `src/ui/sidebar.rs`, `src/ui/drawer.rs` |
@@ -513,6 +525,8 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 - **Running the app touches real state**: the settings file, the system volume (if you exercise the volume bar), and the user's media playback (transport commands). Use a scratch `APPDATA`, and don't send media or volume commands without the user's say-so.
 - **The updater and dev builds**: dev builds skip the launch check (unless `BLAZE_UPDATE_URL` is set), so running from `target/` never replaces that exe unasked. Check now and Install still work in a dev build and *will* replace the exe you're running, so test installs on a copy in a scratch folder.
 - **Release asset names are an API**: the updater looks for `blazeaudio.exe` and `blazeaudio.exe.sha256` (`<hex>  blazeaudio.exe`) on the latest non-prerelease release, and compares its `vX.Y.Z` tag with `CARGO_PKG_VERSION`. Renaming either asset or the repo breaks updates for every installed copy.
+- **Docking moves real windows**: running the app with docking on moves your window next to the user's actual Spotify and changes Spotify's z-order. Never move, resize or minimize the user's Spotify window to test it; ask them to click through those cases.
+- **Dock feedback loops**: `dock::place` skips `SetWindowPos` when the window is already there, and the hook callback only queues one `Wake` until it's handled. Keep both, or a Spotify drag floods the loop with events.
 - **Line endings**: the repo stores LF, with `core.autocrlf=true` on this machine. Git's LF→CRLF warnings on commit are expected and harmless.
 
 ---

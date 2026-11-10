@@ -63,6 +63,7 @@ Switch with the number keys, `S` for the next scene, or the buttons in **Visuals
 - **Seeking**: hover the visuals for a wide timeline you can drag, click or scroll. `Left` / `Right` jump 5 s.
 - **Volume**: hovering also shows a volume bar for the Windows output volume. `Up` / `Down` change it and `M` mutes.
 - **Window modes**: windowed with the sidebar, or borderless fullscreen (`F11`) for just the visuals.
+- **Dock to Spotify**: **General → Dock to Spotify** sticks the window to the left or right of Spotify's window (the spotify.com app or the Microsoft Store one) as a frameless panel with Windows 11's rounded corners. It matches Spotify's height, follows it when it moves or resizes, minimizes with it, and comes to the front with it. Drag the panel's outer edge to change its width; `Tab` brings in the sidebar, which widens the panel outward. If the chosen side would be off the screen it uses the other one. While Spotify is maximized there's no room beside it, so the panel either floats as a normal window or hides, whichever you pick.
 - **Look controls**: bloom, exposure, chromatic aberration, film grain, vignette and per-scene options, each resettable on its own. **Randomize** rolls a new look, **Undo** steps back and **Reset** restores the defaults.
 - **Lightweight**: about 0.1% CPU when idle and under 1% while playing, with around 20 MB of memory. It slows down when nothing is playing and stops rendering when hidden.
 - **Updates itself**: on launch it checks GitHub for a new release. By default it downloads it in the background and swaps it in, so the next start runs the new version (or click **Restart now** under General). Set **Updates** to **Notify** to just be told, or **Off** to never go online unless you click **Check now**.
@@ -92,7 +93,7 @@ The sidebar has five sections:
 - **Visuals**: scene, auto-switch, the scene's own options, and the shared look effects
 - **Audio**: sensitivity, how fast bars rise and fall, beat sensitivity
 - **Palette**: album colours on or off, and the fallback palette
-- **General**: window and startup mode, theme (Dark, OLED black, Light), on-scene extras, updates
+- **General**: window and startup mode, docking to Spotify, theme (Dark, OLED black, Light), on-scene extras, updates
 - **Hotkeys**: the full key list
 
 A changed setting shows a reset button next to it; double-clicking its label also resets it. Settings are saved to `%APPDATA%\BlazeAudio\settings.json`.

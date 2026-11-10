@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod dock;
 mod gpu;
 mod media;
 mod palette;
@@ -23,14 +24,14 @@ use winit::event::{ElementState, MouseButton, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::platform::windows::WindowAttributesExtWindows;
-use winit::window::{Fullscreen, Icon, Window, WindowId};
+use winit::window::{Fullscreen, Icon, ResizeDirection, Window, WindowId};
 
 use audio::{AudioEngine, AudioParams};
 use gpu::Gpu;
 use media::{MediaCmd, MediaWatcher, TrackInfo};
 use palette::PRESETS;
 use scenes::SceneId;
-use settings::{AutoScene, Settings, WindowGeom, WindowMode};
+use settings::{AutoScene, DockFull, DockSide, Settings, WindowGeom, WindowMode};
 use update::Updater;
 use vis::VisState;
 
@@ -113,6 +114,21 @@ fn set_icons(w: &Window) {
     w.set_taskbar_icon(icon(32.0));
 }
 
+/// The window while it's docked beside Spotify.
+struct Docked {
+    /// Where the window was before docking (outer position, inner size); it goes back there after.
+    float: (PhysicalPosition<i32>, PhysicalSize<u32>),
+    /// The side it's on now: the chosen one, or the other when the chosen one is off the screen.
+    side: DockSide,
+    /// Minimized because Spotify was, so it comes back up with Spotify.
+    minimized_with: bool,
+    /// Hidden while Spotify is maximized (`DockFull::Hide`).
+    hidden: bool,
+}
+
+/// What the docked window's size and place depend on besides Spotify's window; a change re-docks.
+type DockKey = (DockSide, DockFull, u32, u32, WindowMode);
+
 struct Gfx {
     window: Arc<Window>,
     gpu: Gpu,
@@ -174,6 +190,14 @@ struct App {
     /// Scene area in physical pixels (x, y, w, h), i.e. the window minus docked panels.
     scene_px: [f32; 4],
     cursor: PhysicalPosition<f64>,
+
+    dock: dock::Tracker,
+    docked: Option<Docked>,
+    /// The `DockKey` the window was last docked with; `None` forces a re-dock.
+    dock_key: Option<DockKey>,
+    dock_status: &'static str,
+    /// The panel's edge is being dragged; its width follows the window's until the button is up.
+    dock_resizing: bool,
 }
 
 impl App {
@@ -196,7 +220,8 @@ impl App {
             gfx: None,
             ui: ui::UiState::new(),
             windowed_rect: None,
-            show_sidebar: settings.start_mode == WindowMode::Windowed,
+            // A docked panel starts as just the scene; Tab brings the sidebar in.
+            show_sidebar: settings.start_mode == WindowMode::Windowed && settings.dock == DockSide::Off,
             modifiers: ModifiersState::empty(),
             start: now,
             last_frame: now,
@@ -225,6 +250,11 @@ impl App {
             ignore_audio: std::env::var_os("BLAZE_IGNORE_AUDIO").is_some(),
             scene_px: [0.0, 0.0, f32::MAX, f32::MAX],
             cursor: PhysicalPosition::new(0.0, 0.0),
+            dock: dock::Tracker::new(),
+            docked: None,
+            dock_key: None,
+            dock_status: "",
+            dock_resizing: false,
             settings,
         }
     }
@@ -279,6 +309,8 @@ impl App {
         let w = &g.window;
         let prev = self.settings.window;
         let rect = match self.mode {
+            // Docked, it's wherever Spotify is; the next launch floats where it was before docking.
+            _ if self.docked.is_some() => self.docked.as_ref().map(|d| d.float),
             WindowMode::Windowed if w.is_minimized() == Some(true) => return,
             // A maximized window's rect is the whole monitor; keep the restored rect from
             // before and only note that it was maximized.
@@ -291,9 +323,126 @@ impl App {
             _ => self.windowed_rect,
         };
         if let Some((pos, size)) = rect {
-            let maximized = self.mode != WindowMode::Windowed && prev.is_some_and(|p| p.maximized);
+            let maximized = (self.mode != WindowMode::Windowed || self.docked.is_some()) && prev.is_some_and(|p| p.maximized);
             self.settings.window = Some(WindowGeom { x: pos.x, y: pos.y, w: size.width, h: size.height, maximized });
         }
+    }
+
+    fn dock_key(&self) -> DockKey {
+        let s = &self.settings;
+        let panels = ui::panels_width(self.show_sidebar, s.sidebar_expanded, self.ui.drawer.is_some());
+        (s.dock, s.dock_full, s.dock_width.to_bits(), panels.to_bits(), self.mode)
+    }
+
+    /// Puts the window where docking says: beside Spotify, minimized or hidden along with it, or
+    /// back to a normal window. Runs on Spotify's window events and when a dock input changes.
+    fn dock_sync(&mut self) {
+        dock::clear_pending();
+        self.dock_key = Some(self.dock_key());
+        let Some(w) = self.gfx.as_ref().map(|g| g.window.clone()) else { return };
+        let Some(ours) = dock::hwnd(&w) else { return };
+        if self.settings.dock == DockSide::Off {
+            self.dock.release();
+            self.undock();
+            return;
+        }
+        // Fullscreen covers everything; docking picks up again on the way back to windowed.
+        if self.mode != WindowMode::Windowed {
+            return;
+        }
+        let Some(t) = self.dock.target().and_then(dock::info) else {
+            self.undock();
+            self.dock_status = "Waiting for Spotify. The panel docks once its window is open.";
+            return;
+        };
+        if t.minimized {
+            if let Some(d) = &mut self.docked {
+                if !d.minimized_with && !d.hidden && w.is_minimized() != Some(true) {
+                    dock::minimize(ours);
+                    d.minimized_with = true;
+                }
+            }
+            return;
+        }
+        if t.fills {
+            self.dock_status = "Spotify is maximized, so there's no room beside it.";
+            match self.settings.dock_full {
+                DockFull::Float => self.undock(),
+                DockFull::Hide => {
+                    if self.docked.is_none() {
+                        self.begin_dock(&w);
+                    }
+                    if let Some(d) = self.docked.as_mut().filter(|d| !d.hidden) {
+                        dock::hide(ours);
+                        (d.hidden, d.minimized_with) = (true, false);
+                    }
+                }
+            }
+            return;
+        }
+        // Minimized by the user rather than with Spotify: it stays down until they bring it back.
+        if self.docked.as_ref().is_some_and(|d| !d.minimized_with && !d.hidden) && w.is_minimized() == Some(true) {
+            return;
+        }
+        if self.docked.is_none() {
+            self.begin_dock(&w);
+        }
+        let panels = ui::panels_width(self.show_sidebar, self.settings.sidebar_expanded, self.ui.drawer.is_some());
+        let width = ((self.settings.dock_width + panels) * w.scale_factor() as f32).round() as i32;
+        let Some(d) = &mut self.docked else { return };
+        if d.minimized_with || d.hidden {
+            dock::show(ours);
+            (d.minimized_with, d.hidden) = (false, false);
+            w.request_redraw();
+        }
+        // Switch sides when the chosen one would be mostly off the screen and the other has room
+        // (Spotify snapped to that half of the screen, say).
+        let r = t.rect;
+        let room = |side: DockSide, part: i32| match side {
+            DockSide::Left => r.left - width / part >= t.work.left,
+            _ => r.right + width / part <= t.work.right,
+        };
+        let other = if self.settings.dock == DockSide::Left { DockSide::Right } else { DockSide::Left };
+        d.side = if !room(self.settings.dock, 2) && room(other, 1) { other } else { self.settings.dock };
+        let x = if d.side == DockSide::Left { r.left - width } else { r.right };
+        dock::place(ours, x, r.top, width, r.bottom - r.top);
+        if t.foreground {
+            dock::raise(ours);
+        }
+        self.dock_status = "Docked. Drag the panel's outer edge to resize it.";
+    }
+
+    /// Starts docking: remembers where the window floats and drops its frame.
+    fn begin_dock(&mut self, w: &Window) {
+        if w.is_maximized() {
+            w.set_maximized(false);
+        }
+        let pos = w.outer_position().unwrap_or_default();
+        self.docked = Some(Docked { float: (pos, w.inner_size()), side: self.settings.dock, minimized_with: false, hidden: false });
+        w.set_decorations(false);
+        if let Some(ours) = dock::hwnd(w) {
+            dock::round_corners(ours, true);
+        }
+    }
+
+    /// Back to a normal window where it was before docking.
+    fn undock(&mut self) {
+        let Some(d) = self.docked.take() else { return };
+        let Some(g) = &self.gfx else { return };
+        if let Some(ours) = dock::hwnd(&g.window) {
+            if d.hidden || d.minimized_with {
+                dock::show(ours);
+            }
+            dock::round_corners(ours, false);
+        }
+        g.window.set_decorations(true);
+        if self.mode == WindowMode::Windowed {
+            g.window.set_outer_position(d.float.0);
+            let _ = g.window.request_inner_size(d.float.1);
+        } else {
+            self.windowed_rect = Some(d.float);
+        }
+        g.window.request_redraw();
     }
 
     fn media(&mut self, cmd: MediaCmd) {
@@ -508,6 +657,8 @@ impl App {
                         volume_alpha,
                         timeline_alpha,
                         update: &self.update,
+                        dock_edge: self.docked.as_ref().filter(|d| !d.hidden).map(|d| d.side),
+                        dock_status: self.dock_status,
                     },
                 );
             });
@@ -602,7 +753,25 @@ impl App {
                         el.exit();
                     }
                 }
+                ui::UiAction::DockResize => {
+                    if let (Some(d), Some(g)) = (&self.docked, &self.gfx) {
+                        let dir = if d.side == DockSide::Left { ResizeDirection::West } else { ResizeDirection::East };
+                        self.dock_resizing = g.window.drag_resize_window(dir).is_ok();
+                    }
+                }
             }
+        }
+
+        // Re-dock when a setting, the sidebar or the mode changed the panel, or when an edge drag
+        // ended. Without a Spotify window, look for one (the tracker limits how often).
+        if self.dock_resizing && !dock::left_button_down() {
+            self.dock_resizing = false;
+            self.dock_key = None;
+        }
+        if !self.dock_resizing
+            && (self.dock_key != Some(self.dock_key()) || (self.settings.dock != DockSide::Off && self.mode == WindowMode::Windowed && !self.dock.following()))
+        {
+            self.dock_sync();
         }
 
         self.idle = !drawer_open && controls_alpha <= 0.0 && volume_alpha <= 0.0 && timeline_alpha <= 0.0 && self.toast_t <= 0.0
@@ -632,7 +801,14 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<dock::Wake> for App {
+    /// Spotify's window moved, resized, minimized, came to the front or went away.
+    fn user_event(&mut self, _el: &ActiveEventLoop, _: dock::Wake) {
+        if !self.dock_resizing {
+            self.dock_sync();
+        }
+    }
+
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gfx.is_some() {
             return;
@@ -728,6 +904,14 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(size) => {
                 self.minimized = size.width == 0 || size.height == 0;
+                // Dragging the docked panel's edge: the scene takes the new width.
+                if self.dock_resizing && !self.minimized {
+                    if let Some(g) = &self.gfx {
+                        let panels = ui::panels_width(self.show_sidebar, self.settings.sidebar_expanded, self.ui.drawer.is_some());
+                        self.settings.dock_width = (size.width as f32 / g.window.scale_factor() as f32 - panels).round().clamp(320.0, 1600.0);
+                        self.dock_key = Some(self.dock_key());
+                    }
+                }
                 if let Some(g) = &mut self.gfx {
                     g.gpu.resize(size.width, size.height);
                     g.window.request_redraw();
@@ -736,6 +920,16 @@ impl ApplicationHandler for App {
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(g) = &self.gfx {
                     set_icons(&g.window);
+                }
+                // Moved onto a monitor with another scale: the panel's width in pixels changes.
+                self.dock_key = None;
+            }
+            // Clicking the docked panel brings Spotify up with it.
+            WindowEvent::Focused(true) => {
+                if let (Some(_), Some(target), Some(g)) = (&self.docked, self.dock.current(), &self.gfx) {
+                    if let Some(ours) = dock::hwnd(&g.window) {
+                        dock::raise_target_under(target, ours);
+                    }
                 }
             }
             WindowEvent::Occluded(o) => {
@@ -811,7 +1005,7 @@ fn main() {
     if already_running(args.iter().any(|a| a == "--relaunch")) {
         return;
     }
-    let event_loop = match EventLoop::new() {
+    let event_loop = match EventLoop::<dock::Wake>::with_user_event().build() {
         Ok(e) => e,
         Err(e) => {
             fatal(&format!("Could not start event loop: {e}"));
@@ -819,6 +1013,7 @@ fn main() {
         }
     };
     event_loop.set_control_flow(ControlFlow::Wait);
+    dock::init(event_loop.create_proxy());
     let mut app = App::new();
     let _ = event_loop.run_app(&mut app);
 }

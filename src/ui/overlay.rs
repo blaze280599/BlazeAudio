@@ -8,7 +8,7 @@ use super::playback::seek_bar;
 use super::theme::Tokens;
 use super::widgets::icon_button;
 use super::{UiAction, UiCtx, UiState};
-use crate::settings::WindowMode;
+use crate::settings::{DockSide, WindowMode};
 use crate::wake::WakeStyle;
 
 /// FPS, frame time, CPU / RAM and tempo in the scene's top-left corner.
@@ -196,6 +196,24 @@ impl UiState {
 }
 
 /// Fullscreen button over the top-right corner of the scene.
+/// An invisible strip along the docked panel's outer edge: the window has no frame while docked,
+/// so this is where it's resized from.
+pub(super) fn dock_grip(ctx: &egui::Context, edge: DockSide, actions: &mut Vec<UiAction>) {
+    const W: f32 = 6.0;
+    let full = ctx.content_rect();
+    let x = if edge == DockSide::Left { full.left() } else { full.right() - W };
+    let rect = Rect::from_min_size(egui::pos2(x, full.top()), egui::vec2(W, full.height()));
+    egui::Area::new(egui::Id::new("dock-grip")).order(egui::Order::Foreground).fixed_pos(rect.min).show(ctx, |ui| {
+        let resp = ui.allocate_rect(rect, Sense::click_and_drag());
+        if resp.hovered() || resp.dragged() {
+            ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if resp.hovered() && ui.input(|i| i.pointer.primary_pressed()) {
+            actions.push(UiAction::DockResize);
+        }
+    });
+}
+
 pub(super) fn window_buttons(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens, actions: &mut Vec<UiAction>) {
     let frame = egui::Frame::new()
         .fill(t.float)

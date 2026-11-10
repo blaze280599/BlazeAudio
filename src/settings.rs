@@ -50,6 +50,22 @@ pub enum UpdateMode {
     Auto,
 }
 
+/// Which side of Spotify's window the docked panel sits on.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum DockSide {
+    Off,
+    Left,
+    Right,
+}
+
+/// What the docked panel does while Spotify is maximized or fullscreen (no room beside it).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum DockFull {
+    /// Back to a normal window where it was before docking.
+    Float,
+    Hide,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -89,6 +105,11 @@ pub struct Settings {
     pub updates: UpdateMode,
     /// Where the window was when the app last closed.
     pub window: Option<WindowGeom>,
+
+    pub dock: DockSide,
+    /// Width of the docked panel's scene in points; an open sidebar and drawer add to it.
+    pub dock_width: f32,
+    pub dock_full: DockFull,
 }
 
 impl Default for Settings {
@@ -122,6 +143,9 @@ impl Default for Settings {
             theme: UiTheme::Dark,
             updates: UpdateMode::Auto,
             window: None,
+            dock: DockSide::Off,
+            dock_width: 440.0,
+            dock_full: DockFull::Float,
         }
     }
 }

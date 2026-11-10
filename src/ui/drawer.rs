@@ -8,7 +8,7 @@ use super::widgets::{choice, heading, icon_button, knob, num, segmented, spectru
 use super::{Section, UiAction, UiCtx, UiState, SECTIONS};
 use crate::palette::{Palette, PRESETS};
 use crate::scenes::SceneId;
-use crate::settings::{AutoScene, Settings, UiTheme, UpdateMode, WindowMode};
+use crate::settings::{AutoScene, DockFull, DockSide, Settings, UiTheme, UpdateMode, WindowMode};
 use crate::update::{Status as UpdateStatus, UpdateCmd, VERSION};
 
 /// Looks to go back to with Undo (taken before each Randomize or Reset).
@@ -98,6 +98,18 @@ impl UiState {
         }
         choice(ui, t, "Start in", &mut s.start_mode, d.start_mode, &modes);
 
+        heading(ui, t, "Dock to Spotify");
+        let sides = [(DockSide::Off, "Off"), (DockSide::Left, "Left"), (DockSide::Right, "Right")];
+        choice(ui, t, "Side", &mut s.dock, d.dock, &sides);
+        if s.dock != DockSide::Off {
+            knob(ui, t, "Panel width", &mut s.dock_width, d.dock_width, 320.0..=1600.0, num(0, " px"));
+            let fulls = [(DockFull::Float, "Float"), (DockFull::Hide, "Hide")];
+            choice(ui, t, "When Spotify is maximized", &mut s.dock_full, d.dock_full, &fulls);
+            ui.label(RichText::new(c.dock_status).small().color(t.faint));
+        } else {
+            ui.label(RichText::new("Sticks to the side of Spotify's window, matching its height, and follows it around.").small().color(t.faint));
+        }
+
         heading(ui, t, "Theme");
         let w = (ui.available_width() - 12.0) / 3.0;
         ui.horizontal(|ui| {
@@ -142,16 +154,18 @@ impl UiState {
                 .inner_margin(Margin::same(10))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("Reset every setting to its default? Theme, startup mode, updates, sidebar size and window position stay.").color(t.text));
+                    ui.label(RichText::new("Reset every setting to its default? Theme, startup mode, docking, updates, sidebar size and window position stay.").color(t.text));
                     ui.horizontal(|ui| {
                         if ui.button("Reset").clicked() {
                             let (mode, expanded, theme, updates, window) = (s.start_mode, s.sidebar_expanded, s.theme, s.updates, s.window);
+                            let (dock, dock_width, dock_full) = (s.dock, s.dock_width, s.dock_full);
                             *s = Settings::default();
                             s.start_mode = mode;
                             s.sidebar_expanded = expanded;
                             s.theme = theme;
                             s.updates = updates;
                             s.window = window;
+                            (s.dock, s.dock_width, s.dock_full) = (dock, dock_width, dock_full);
                             self.confirm_reset = false;
                         }
                         if ui.button("Cancel").clicked() {

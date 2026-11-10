@@ -24,7 +24,7 @@ use theme::{to_c32, tokens};
 
 use crate::media::{MediaCmd, TrackInfo, ART_SIZE};
 use crate::palette::Palette;
-use crate::settings::{Settings, UiTheme, WindowMode};
+use crate::settings::{DockSide, Settings, UiTheme, WindowMode};
 use crate::sys::ProcStats;
 use crate::update::{Status as UpdateStatus, UpdateCmd};
 use crate::vis::VisState;
@@ -42,6 +42,16 @@ pub enum UiAction {
     Update(UpdateCmd),
     /// Close and start the exe on disk (the new version after an update).
     Restart,
+    /// The docked panel's outer edge was grabbed: start a native resize from it.
+    DockResize,
+}
+
+/// Width in points the docked panels take from the window: the sidebar and an open drawer.
+pub fn panels_width(show_sidebar: bool, expanded: bool, drawer_open: bool) -> f32 {
+    if !show_sidebar {
+        return 0.0;
+    }
+    (if expanded { SIDEBAR_W } else { RAIL_W }) + if drawer_open { DRAWER_W } else { 0.0 }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -104,6 +114,10 @@ pub struct UiCtx<'a> {
     /// Opacity of the timeline: the on-scene controls, or a flash after a seek key.
     pub timeline_alpha: f32,
     pub update: &'a UpdateStatus,
+    /// Docked beside Spotify: the window's outer edge (away from Spotify), which resizes the panel.
+    pub dock_edge: Option<DockSide>,
+    /// One line on how docking is going, for General.
+    pub dock_status: &'a str,
 }
 
 impl UiState {
@@ -197,6 +211,9 @@ impl UiState {
         } else if let Some(v) = self.scrub.take() {
             // Hidden mid-drag (e.g. the track ended): still go where it was dragged.
             actions.push(UiAction::Media(MediaCmd::Seek(v)));
+        }
+        if let Some(edge) = c.dock_edge {
+            overlay::dock_grip(ctx, edge, &mut actions);
         }
 
         (actions, scene_rect)
