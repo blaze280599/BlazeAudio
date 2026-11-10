@@ -8,7 +8,7 @@ use super::widgets::{choice, heading, icon_button, knob, num, segmented, spectru
 use super::{Section, UiAction, UiCtx, UiState, SECTIONS};
 use crate::palette::{Palette, PRESETS};
 use crate::scenes::SceneId;
-use crate::settings::{AutoScene, DockFull, DockSide, Settings, UiTheme, UpdateMode, WindowMode};
+use crate::settings::{AutoScene, DockAway, DockSide, Settings, UiTheme, UpdateMode, WindowMode};
 use crate::update::{Status as UpdateStatus, UpdateCmd, VERSION};
 
 /// Looks to go back to with Undo (taken before each Randomize or Reset).
@@ -105,8 +105,9 @@ impl UiState {
         }
         if s.dock != DockSide::Off {
             knob(ui, t, "Panel width", &mut s.dock_width, d.dock_width, 320.0..=1600.0, num(0, " px"));
-            let fulls = [(DockFull::Float, "Float"), (DockFull::Hide, "Hide")];
+            let fulls = [(DockAway::Float, "Float"), (DockAway::Hide, "Hide")];
             choice(ui, t, "When Spotify is maximized", &mut s.dock_full, d.dock_full, &fulls);
+            choice(ui, t, "When Spotify closes", &mut s.dock_closed, d.dock_closed, &fulls);
             ui.label(RichText::new(c.dock_status).small().color(t.faint));
         } else {
             ui.label(RichText::new("Sticks to the side of Spotify's window, matching its height, and follows it around.").small().color(t.faint));
@@ -160,14 +161,14 @@ impl UiState {
                     ui.horizontal(|ui| {
                         if ui.button("Reset").clicked() {
                             let (mode, expanded, theme, updates, window) = (s.start_mode, s.sidebar_expanded, s.theme, s.updates, s.window);
-                            let (dock, dock_last, dock_width, dock_full) = (s.dock, s.dock_last, s.dock_width, s.dock_full);
+                            let (dock, dock_last, dock_width, dock_full, dock_closed) = (s.dock, s.dock_last, s.dock_width, s.dock_full, s.dock_closed);
                             *s = Settings::default();
                             s.start_mode = mode;
                             s.sidebar_expanded = expanded;
                             s.theme = theme;
                             s.updates = updates;
                             s.window = window;
-                            (s.dock, s.dock_last, s.dock_width, s.dock_full) = (dock, dock_last, dock_width, dock_full);
+                            (s.dock, s.dock_last, s.dock_width, s.dock_full, s.dock_closed) = (dock, dock_last, dock_width, dock_full, dock_closed);
                             self.confirm_reset = false;
                         }
                         if ui.button("Cancel").clicked() {

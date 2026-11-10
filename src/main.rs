@@ -29,7 +29,7 @@ use audio::{AudioEngine, AudioParams};
 use gpu::Gpu;
 use media::{MediaWatcher, TrackInfo};
 use palette::PRESETS;
-use settings::{AutoScene, DockFull, DockSide, Settings, WindowGeom, WindowMode};
+use settings::{AutoScene, DockAway, DockSide, Settings, WindowGeom, WindowMode};
 use update::Updater;
 use vis::VisState;
 
@@ -75,7 +75,7 @@ fn already_running(wait: bool) -> bool {
     use windows::core::{w, HSTRING};
     use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
     use windows::Win32::System::Threading::CreateMutexW;
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW};
     let tries = if wait { 50 } else { 1 };
     unsafe {
         for i in 0..tries {
@@ -93,6 +93,10 @@ fn already_running(wait: bool) -> bool {
         if let Ok(hwnd) = FindWindowW(&HSTRING::from(WINDOW_CLASS), None) {
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
+            } else if !IsWindowVisible(hwnd).as_bool() {
+                // A docked panel hidden while Spotify is closed has no taskbar button; launching
+                // again is the way back to it (it floats once it has focus, see `Focused`).
+                let _ = ShowWindow(hwnd, SW_SHOW);
             }
             let _ = SetForegroundWindow(hwnd);
         }
@@ -118,9 +122,10 @@ struct Docked {
     float: (PhysicalPosition<i32>, PhysicalSize<u32>),
     /// The side it's on now: the chosen one, or the other when the chosen one is off the screen.
     side: DockSide,
-    /// Minimized because Spotify was, so it comes back up with Spotify.
+    /// Gone along with Spotify (minimized, or closed with `dock_closed` set to hide), so it comes
+    /// back up with Spotify.
     minimized_with: bool,
-    /// Hidden while Spotify is maximized (`DockFull::Hide`).
+    /// Hidden while Spotify is maximized (`DockAway::Hide`).
     hidden: bool,
     /// 1 fully shown, 0 faded out.
     opacity: f32,
@@ -142,7 +147,7 @@ const FADE_OUT: f32 = 0.15;
 const FADE_IN: f32 = 0.2;
 
 /// What the docked window's size and place depend on besides Spotify's window; a change re-docks.
-type DockKey = (DockSide, DockFull, u32, u32, WindowMode);
+type DockKey = (DockSide, DockAway, u32, u32, WindowMode);
 
 struct Gfx {
     window: Arc<Window>,
@@ -358,31 +363,28 @@ impl App {
             return;
         }
         let Some((target, t)) = self.dock.target().and_then(|h| Some((h, dock::info(h)?))) else {
-            self.undock();
-            self.dock_status = "Waiting for Spotify. The panel docks once its window is open.";
+            // Spotify closed or went to the tray. Only a panel that was docked hides: launching
+            // while Spotify is closed would otherwise show nothing at all.
+            if self.settings.dock_closed == DockAway::Hide && self.docked.is_some() {
+                self.dock_away(&w, ours);
+                self.dock_status = "Hidden until Spotify reopens.";
+            } else {
+                self.undock();
+                self.dock_status = "Waiting for Spotify. The panel docks once its window is open.";
+            }
             return;
         };
         // The panel goes down with Spotify and comes back up with it, even if it was minimized on
         // its own first. It hides rather than minimizes: with no taskbar button, a minimized
         // window would be parked as a stub title bar in a corner of the desktop.
         if t.minimized {
-            if let Some(d) = self.docked.as_mut().filter(|d| !d.hidden && !d.minimized_with) {
-                d.minimized_with = true;
-                if w.is_minimized() != Some(true) {
-                    if dock::animations_on() {
-                        d.fade = Some(Fade { start: Instant::now(), out: true, from: d.opacity });
-                        w.request_redraw();
-                    } else {
-                        dock::hide(ours);
-                    }
-                }
-            }
+            self.dock_away(&w, ours);
             return;
         }
         if t.fills {
             self.dock_status = "Spotify is maximized, so there's no room beside it.";
             match self.settings.dock_full {
-                DockFull::Float => {
+                DockAway::Float => {
                     self.undock();
                     // Its pre-dock spot is usually under the maximized Spotify, where it would look
                     // gone; keep it above Spotify whenever Spotify comes to the front.
@@ -390,7 +392,7 @@ impl App {
                         dock::raise(ours);
                     }
                 }
-                DockFull::Hide => {
+                DockAway::Hide => {
                     if self.docked.is_none() {
                         self.begin_dock(&w);
                     }
@@ -442,6 +444,21 @@ impl App {
         }
         dock::stack_above(target, ours);
         self.dock_status = "Docked. Drag the panel's outer edge to resize it.";
+    }
+
+    /// Takes the docked panel down along with Spotify: fades it out, then hides it. `dock_sync`
+    /// brings it back when Spotify is up again.
+    fn dock_away(&mut self, w: &Window, ours: windows::Win32::Foundation::HWND) {
+        let Some(d) = self.docked.as_mut().filter(|d| !d.hidden && !d.minimized_with) else { return };
+        d.minimized_with = true;
+        if w.is_minimized() != Some(true) {
+            if dock::animations_on() {
+                d.fade = Some(Fade { start: Instant::now(), out: true, from: d.opacity });
+                w.request_redraw();
+            } else {
+                dock::hide(ours);
+            }
+        }
     }
 
     /// Moves a running fade on to where it should be by now, and ends it: hidden after a fade
@@ -894,7 +911,8 @@ impl ApplicationHandler<dock::Wake> for App {
                 self.dock_fade();
                 self.schedule(el);
             } else if self.docked.as_ref().is_some_and(|d| d.hidden || d.minimized_with) {
-                if self.dock.lost() {
+                // Also looks for Spotify again while it's closed (the tracker limits how often).
+                if self.dock.lost() || !self.dock.following() {
                     self.dock_sync();
                 }
                 self.schedule(el);
@@ -952,9 +970,13 @@ impl ApplicationHandler<dock::Wake> for App {
                 // Moved onto a monitor with another scale: the panel's width in pixels changes.
                 self.dock_key = None;
             }
-            // Clicking the docked panel brings Spotify up with it.
+            // Clicking the docked panel brings Spotify up with it. Focused after it had gone away with
+            // Spotify, it was brought back by hand (launching it again): float as a normal window.
+            // Windows may activate it mid-fade as Spotify goes; that one doesn't count.
             WindowEvent::Focused(true) => {
-                if let (Some(_), Some(target), Some(g)) = (&self.docked, self.dock.current(), &self.gfx) {
+                if self.docked.as_ref().is_some_and(|d| (d.hidden || d.minimized_with) && d.fade.is_none()) {
+                    self.undock();
+                } else if let (Some(_), Some(target), Some(g)) = (&self.docked, self.dock.current(), &self.gfx) {
                     if let Some(ours) = dock::hwnd(&g.window) {
                         dock::raise_target_under(target, ours);
                     }

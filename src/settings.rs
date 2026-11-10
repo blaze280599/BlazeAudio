@@ -58,9 +58,10 @@ pub enum DockSide {
     Right,
 }
 
-/// What the docked panel does while Spotify is maximized or fullscreen (no room beside it).
+/// What the docked panel does while Spotify is maximized or fullscreen (no room beside it), and
+/// while Spotify is closed or in the tray (nothing to sit beside).
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
-pub enum DockFull {
+pub enum DockAway {
     /// Back to a normal window where it was before docking.
     Float,
     Hide,
@@ -111,7 +112,9 @@ pub struct Settings {
     pub dock_last: DockSide,
     /// Width of the docked panel's scene in points; an open sidebar and drawer add to it.
     pub dock_width: f32,
-    pub dock_full: DockFull,
+    pub dock_full: DockAway,
+    /// After Spotify closes. `Hide` waits out of sight and comes back with Spotify.
+    pub dock_closed: DockAway,
 }
 
 impl Default for Settings {
@@ -148,7 +151,8 @@ impl Default for Settings {
             dock: DockSide::Off,
             dock_last: DockSide::Right,
             dock_width: 440.0,
-            dock_full: DockFull::Float,
+            dock_full: DockAway::Float,
+            dock_closed: DockAway::Float,
         }
     }
 }
@@ -279,6 +283,15 @@ mod tests {
         let s: Settings = serde_json::from_value(v).unwrap();
         assert_eq!(s.start_mode, WindowMode::Windowed);
         assert_eq!(s.intensity, 1.2);
+    }
+
+    #[test]
+    fn dock_closed_defaults_to_float() {
+        // Files from before the setting keep the old behaviour; a saved choice survives.
+        let old: Settings = serde_json::from_str(r#"{"dock":"Right","dock_full":"Hide"}"#).unwrap();
+        assert_eq!((old.dock_full, old.dock_closed), (DockAway::Hide, DockAway::Float));
+        let new: Settings = serde_json::from_str(r#"{"dock":"Right","dock_closed":"Hide"}"#).unwrap();
+        assert_eq!(new.dock_closed, DockAway::Hide);
     }
 
     #[test]
