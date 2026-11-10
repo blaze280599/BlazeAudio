@@ -217,6 +217,35 @@ pub(super) fn dock_grip(ctx: &egui::Context, edge: DockSide, actions: &mut Vec<U
     });
 }
 
+/// Whether this is the docked panel on screen beside Spotify (windowed; fullscreen suspends docking).
+pub(super) fn docked_panel(c: &UiCtx) -> bool {
+    c.mode == WindowMode::Windowed && c.dock_edge.is_some()
+}
+
+/// Height of the bottom-left Show sidebar pill, so the toast can rise above it.
+pub(super) const SHOW_SIDEBAR_H: f32 = 36.0;
+
+/// Show sidebar in the docked panel's bottom-left corner, where the sidebar's own Hide sidebar
+/// sits, so the two toggles are in the same place.
+pub(super) fn show_sidebar_button(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens, actions: &mut Vec<UiAction>) {
+    egui::Area::new(egui::Id::new("show-sidebar"))
+        .pivot(Align2::LEFT_BOTTOM)
+        .fixed_pos(scene.left_bottom() + egui::vec2(12.0, -12.0))
+        .show(ctx, |ui| {
+            ui.multiply_opacity(c.controls_alpha);
+            egui::Frame::new()
+                .fill(t.float)
+                .stroke(Stroke::new(1.0_f32, t.border))
+                .corner_radius(CornerRadius::same(18))
+                .inner_margin(Margin::symmetric(6, 4))
+                .show(ui, |ui| {
+                    if labeled_icon_button(ui, t, Icon::ShowSidebar, "Show sidebar", None).clicked() {
+                        actions.push(UiAction::ShowSidebar);
+                    }
+                });
+        });
+}
+
 pub(super) fn window_buttons(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &Tokens, actions: &mut Vec<UiAction>) {
     let frame = egui::Frame::new()
         .fill(t.float)
@@ -234,15 +263,17 @@ pub(super) fn window_buttons(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &To
         (_, Some(_)) => 1,
         _ => 2,
     };
+    // Docked, Show sidebar moves to the bottom-left corner (`show_sidebar_button`).
+    let show_here = !c.show_sidebar && !docked_panel(c);
     // The id follows the buttons and labels, so the Area doesn't keep a narrower size.
-    egui::Area::new(egui::Id::new(("window-buttons", c.show_sidebar, windowed, dock_state)))
+    egui::Area::new(egui::Id::new(("window-buttons", show_here, windowed, dock_state)))
         .pivot(Align2::RIGHT_TOP)
         .fixed_pos(scene.right_top() + egui::vec2(-12.0, 12.0))
         .show(ctx, |ui| {
             ui.multiply_opacity(c.controls_alpha);
             frame.show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if !c.show_sidebar && icon_button(ui, t, Icon::ShowSidebar, 26.0).on_hover_text("Show sidebar").clicked() {
+                    if show_here && icon_button(ui, t, Icon::ShowSidebar, 26.0).on_hover_text("Show sidebar").clicked() {
                         actions.push(UiAction::ShowSidebar);
                     }
                     if windowed {

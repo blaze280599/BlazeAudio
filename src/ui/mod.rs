@@ -193,7 +193,10 @@ impl UiState {
         // down as the one below it fades, and the toast rises above whatever is showing.
         let vol_a = if c.settings.show_volume && c.volume.available() { c.volume_alpha } else { 0.0 };
         let tl_a = c.timeline_alpha;
-        let toast_lift = 64.0 * vol_a + 46.0 * tl_a;
+        // Docked with the sidebar hidden, Show sidebar takes the bottom-left corner under the toast.
+        let corner_button = !c.show_sidebar && overlay::docked_panel(&c);
+        let corner_a = if corner_button { c.controls_alpha } else { 0.0 };
+        let toast_lift = 64.0 * vol_a + 46.0 * tl_a + (overlay::SHOW_SIDEBAR_H + 8.0) * corner_a;
 
         if c.toast_alpha > 0.0 && c.settings.show_track_toast && !c.track.title.is_empty() {
             self.toast(ctx, scene_rect, &c, &ft, toast_lift);
@@ -203,6 +206,9 @@ impl UiState {
 
         if c.controls_alpha > 0.0 {
             overlay::window_buttons(ctx, scene_rect, &c, &ft, &mut actions);
+            if corner_button {
+                overlay::show_sidebar_button(ctx, scene_rect, &c, &ft, &mut actions);
+            }
         }
         self.controls_hot = false;
         if vol_a > 0.0 {
