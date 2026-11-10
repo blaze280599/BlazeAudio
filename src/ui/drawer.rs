@@ -83,7 +83,6 @@ impl UiState {
             Section::Audio => audio(ui, c, t, accent),
             Section::Palette => palette(ui, c, t),
             Section::General => self.general(ui, c, t, actions),
-            Section::Hotkeys => hotkeys(ui, t),
         });
     }
 
@@ -129,7 +128,7 @@ impl UiState {
         ui.checkbox(&mut s.show_track_toast, "Now-playing toast and hints");
         ui.checkbox(&mut s.show_volume, "Volume bar");
         ui.checkbox(&mut s.show_timeline, "Track timeline (seek by dragging)");
-        ui.checkbox(&mut s.show_stats, "Performance stats (F3)");
+        ui.checkbox(&mut s.show_stats, "Performance stats");
         knob(ui, t, "Idle frame cap", &mut s.idle_fps, d.idle_fps, 5..=60, num(0, " fps"));
 
         heading(ui, t, "Updates");
@@ -217,10 +216,8 @@ fn visuals(ui: &mut egui::Ui, s: &mut Settings, t: &Tokens) {
     let w = ui.available_width();
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 4.0;
-        for (i, id) in SceneId::ALL.into_iter().enumerate() {
-            // The number keys only reach the first nine.
-            let name = if i < 9 { format!("{}  {}", i + 1, id.name()) } else { id.name().to_owned() };
-            if ui.add_sized([w, 28.0], egui::Button::new(name).selected(s.visual == id)).clicked() {
+        for id in SceneId::ALL {
+            if ui.add_sized([w, 28.0], egui::Button::new(id.name()).selected(s.visual == id)).clicked() {
                 s.visual = id;
             }
         }
@@ -290,29 +287,6 @@ fn palette(ui: &mut egui::Ui, c: &mut UiCtx, t: &Tokens) {
     }
 }
 
-fn hotkeys(ui: &mut egui::Ui, t: &Tokens) {
-    let digits: Vec<String> = (1..=SceneId::ALL.len().min(9)).map(|i| i.to_string()).collect();
-    let digits: Vec<&str> = digits.iter().map(String::as_str).collect();
-    let rows: [(&str, &[&str]); 12] = [
-        ("Sidebar", &["F1", "Tab"]),
-        ("Scene", &digits),
-        ("Next scene", &["S"]),
-        ("Play / pause", &["Space"]),
-        ("Next / previous track", &["N", "P"]),
-        ("Seek 5 s", &["Left", "Right"]),
-        ("Fullscreen", &["F11", "F", "Alt+Enter"]),
-        ("Show now playing", &["T"]),
-        ("Volume up / down", &["Up", "Down"]),
-        ("Mute", &["M"]),
-        ("Performance stats", &["F3"]),
-        ("Back", &["Esc"]),
-    ];
-    for (d, keys) in rows {
-        key_row(ui, t, d, keys);
-    }
-    ui.label(RichText::new("Double-click the scene to toggle fullscreen.").small().color(t.faint));
-}
-
 /// Selectable palette preset: its four colours, then its name.
 pub(super) fn palette_row(ui: &mut egui::Ui, t: &Tokens, name: &str, pal: &Palette, selected: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), Sense::click());
@@ -330,25 +304,6 @@ pub(super) fn palette_row(ui: &mut egui::Ui, t: &Tokens, name: &str, pal: &Palet
     let col = if selected || resp.hovered() { t.text } else { t.dim };
     p.text(egui::pos2(rect.left() + 10.0 + 4.0 * 17.0 + 8.0, rect.center().y), Align2::LEFT_CENTER, name, FontId::proportional(13.5), col);
     resp
-}
-
-/// Hotkey row: description on the left, key caps right-aligned.
-pub(super) fn key_row(ui: &mut egui::Ui, t: &Tokens, desc: &str, keys: &[&str]) {
-    ui.horizontal(|ui| {
-        ui.set_min_height(26.0);
-        ui.label(RichText::new(desc).color(t.text));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            for k in keys.iter().rev() {
-                egui::Frame::new()
-                    .fill(t.control)
-                    .stroke(Stroke::new(1.0_f32, t.border))
-                    .corner_radius(CornerRadius::same(5))
-                    .inner_margin(Margin::symmetric(6, 2))
-                    .show(ui, |ui| ui.label(RichText::new(*k).monospace().color(t.text)));
-            }
-        });
-    });
 }
 
 /// Clickable preview of a theme: a miniature sidebar and panel in that theme's colours.

@@ -62,7 +62,7 @@ impl UiState {
         if !expanded {
             // Bottom-up: the play button goes under the cover.
             if show_controls && pb.can_play_pause {
-                let (icon, tip) = if pb.playing { (Icon::Pause, "Pause (Space)") } else { (Icon::Play, "Play (Space)") };
+                let (icon, tip) = if pb.playing { (Icon::Pause, "Pause") } else { (Icon::Play, "Play") };
                 if icon_button(ui, t, icon, 40.0).on_hover_text(tip).clicked() {
                     actions.push(UiAction::Media(MediaCmd::PlayPause));
                 }

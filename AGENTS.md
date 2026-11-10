@@ -134,15 +134,14 @@ Key facts:
 - **egui only runs when something is visible**: the sidebar, toast, "nothing playing" hint, stats, on-scene controls, the volume bar or the timeline. The `need_ui` expression lists them. Anything new that draws over the scene must be added there and to `idle`, or it will freeze or vanish.
 - **The UI runs before rendering** because the docked sidebar decides the scene viewport. Scene targets are sized to the viewport times `render_scale`. When that size changes, `Gpu::rebuild_targets` rebuilds the bloom chain and calls `Scene::resize` on every scene.
 - **Frame pacing**: when active, vsync (`AutoVsync`) paces frames through `request_redraw`. When idle, `WaitUntil(last_frame + 1/idle_fps)`. When minimized or occluded, it waits with no timer; `Resized` / `Occluded(false)` request the next frame.
-- **Settings save points**: the drawer closing, the sidebar being hidden, Esc closing the drawer, `CloseRequested` (which also calls `remember_window()`), and `exiting`. Saving is atomic: write `.json.tmp`, then rename.
+- **Settings save points**: the drawer closing, the sidebar being hidden, `CloseRequested` (which also calls `remember_window()`), and `exiting`. Saving is atomic: write `.json.tmp`, then rename.
 - `trim_at` schedules `sys::trim_working_set()` a few seconds after startup and mode changes. It's a cosmetic memory-footprint measure.
 
 ### 3.3 Window modes and input (`main.rs`)
 
 - **Windowed** shows the sidebar and decorations. **Fullscreen** is `Fullscreen::Borderless`, hides the sidebar, and hides the cursor after 2.5 s without movement.
 - The swapchain is an ordinary opaque HWND flip-model swapchain (wgpu's DX12 default).
-- `handle_key` ignores Ctrl and Alt combos (except Alt+Enter).
-- Keys: `handle_key` gets presses that aren't repeats, except the arrow keys, which repeat for volume and seek. It skips keys when egui wants the keyboard (a text field is focused) or consumed the event (except F1).
+- There are no keyboard shortcuts, by the user's choice: the app ignores key presses outside egui's own text fields. Everything is reached with the mouse (sidebar, drawer, on-scene buttons). Don't add hotkeys unless the user asks.
 - Double-click on the scene, outside any UI area, toggles fullscreen (`MouseInput` plus `scene_px`).
 - **Docking** (`dock.rs`, `App::dock_sync`): with `settings.dock` set, `dock::Tracker` finds Spotify's main window (a shown, unowned `Chrome_WidgetWin_1` with a title, owned by `Spotify.exe`, which covers both the spotify.com and Microsoft Store installs) and hooks location, minimize, foreground, destroy, show and hide events on its process. `dock_sync` then:
   - places the window flush against Spotify's visible bounds (DWM extended frame bounds, not `GetWindowRect`), frameless with DWM-rounded corners (`dock::round_corners`, reset on undock), at Spotify's height and `dock_width` points wide plus `ui::panels_width` for an open sidebar and drawer, so those widen the panel outward. It switches sides when the chosen one would be mostly off the monitor's work area.
@@ -218,7 +217,7 @@ The UI is **egui**, in immediate mode, redrawn every frame it runs.
 | `icons.rs` | `Icon` enum + `paint_icon` (about 16 pt line icons drawn with egui shapes) |
 | `playback.rs` | `seek_bar` (sidebar click-to-jump, or on-scene drag/scroll scrubbing), `time_bubble`, `transport`, `fmt_time` |
 | `sidebar.rs` | Logo, section list, collapse/hide, now-playing card (art, title, seek bar, transport, spectrum) |
-| `drawer.rs` | Drawer shell, Visuals footer (Randomize / Undo / Reset, undo depth 32), and one function per section: `visuals`, `audio`, `palette`, `general` (method; owns the reset confirm), `hotkeys`; also `palette_row`, `key_row`, `theme_card` |
+| `drawer.rs` | Drawer shell, Visuals footer (Randomize / Undo / Reset, undo depth 32), and one function per section: `visuals`, `audio`, `palette`, `general` (method; owns the reset confirm); also `palette_row`, `theme_card` |
 | `overlay.rs` | `stats_hud`, `toast`, `empty_hint` ("Nothing playing" / "No output device" in the toast's place), `window_buttons` (show-sidebar while it's hidden, the Dock / Undock / Waiting toggle, fullscreen), `volume_bar` (uses `wake::WakeSlider`), `timeline`, `dock_grip` (the docked panel's resize edge) |
 
 UI conventions:
@@ -381,11 +380,11 @@ Variations:
 **3. Register** in `src/scenes/mod.rs`:
 
 - `mod <name>;` (or `pub mod` if `snapshot.rs` needs its types)
-- a `SceneId::<Name>` variant, appended to `SceneId::ALL`. The order of `ALL` is the order of the buttons and number keys; append rather than insert unless the user asks.
+- a `SceneId::<Name>` variant, appended to `SceneId::ALL`. The order of `ALL` is the order of the buttons; append rather than insert unless the user asks.
 - an arm in `SceneId::name()` with the display name, and one in `SceneId::build()`
 - if it has settings: a field `pub <name>: <name>::Settings` in `SceneSettings`, and an arm in `SceneSettings::config()`
 
-From those, everything else updates automatically: sidebar buttons, number keys (first 9), `S` / Next, auto-switch (by track and timer), Randomize (through `SceneSettings::randomize` → `config()`), Reset and Undo (through `copy_look`, which copies all of `scenes`), and the Hotkeys list.
+From those, everything else updates automatically: sidebar buttons, auto-switch (by track and timer), Randomize (through `SceneSettings::randomize` → `config()`), and Reset and Undo (through `copy_look`, which copies all of `scenes`).
 
 **4. Self-test** – add a block to `snapshot::run` after the existing scenes:
 
@@ -393,7 +392,7 @@ From those, everything else updates automatically: sidebar buttons, number keys 
 - time 150 frames and append `render (<name>): … ms/frame` to the report
 - capture one PNG per mode or shape
 
-**5. Docs** – in `README.md`, add the scene to the scene list and the `1` / `2` / `3` row of the Controls table. Update §1 of this file (the list of current scenes). The README's scene gallery uses animated WebP clips in `docs/media/` (about 4.5 s, 800 px wide, 2 MB or less), recorded from the running app with ffmpeg's `ddagrab`; add one for the new scene.
+**5. Docs** – in `README.md`, add the scene to the scene table. Update §1 of this file (the list of current scenes). The README's scene gallery uses animated WebP clips in `docs/media/` (about 4.5 s, 800 px wide, 2 MB or less), recorded from the running app with ffmpeg's `ddagrab`; add one for the new scene.
 
 **6. Verify** – `cargo clippy --all-targets` (no warnings), `cargo test`, then the snapshot. Look at the new PNGs, and byte-compare the existing ones against the previous build; they must not change. Check the ms/frame for the new scene: about 1.2 ms at 1280×720 is typical, and much more than that needs a reason.
 
@@ -418,30 +417,24 @@ From those, everything else updates automatically: sidebar buttons, number keys 
 - **A value every shader needs**: add it to `gpu::Globals` **and** `Globals` in `common.wgsl`, at the same position. Replace the `_pad` / `_pad0` slot if one is free, or add a full vec4's worth of fields so the size stays a multiple of 16 and `pal` stays 16-byte aligned. Fill it in `VisState::globals()`. Prefer a scene's `Params` unless several scenes need the value.
 - **Renaming, moving or retyping a stored setting**: add a rewrite in `settings::migrate()` (or a serde alias for a simple rename) and a unit test next to the existing ones.
 
-### 5.3 Add a hotkey
-
-1. Add an arm to `App::handle_key` in `main.rs`. Keys arrive only without Ctrl or Alt.
-2. Add a row to the `rows` array in `hotkeys()` (`ui/drawer.rs`), and bump the array length.
-3. Add the key to the Controls table in `README.md`.
-
-### 5.4 Add a settings section
+### 5.3 Add a settings section
 
 1. Add a `Section` variant and an entry in `SECTIONS` (`ui/mod.rs`) with a label and an `Icon`. Add the icon's variant and its drawing in `ui/icons.rs` (fits a 16 pt box, 1.5 pt strokes, `col` colour).
 2. Add an arm in `drawer_body()` (`ui/drawer.rs`) that calls a new section function.
 3. If the section needs state that isn't in `Settings`, add it to `UiCtx` and fill it in `App::frame`.
 
-### 5.5 Add something on the scene
+### 5.4 Add something on the scene
 
 1. Draw it in `ui/overlay.rs`: an `egui::Area` anchored to the `scene` rect, `ft` tokens, and `ui.multiply_opacity(alpha)`.
 2. Call it from `UiState::draw`, respecting the bottom-centre stack (volume bar, timeline, toast lift).
 3. Compute its alpha in `App::frame`, usually from `controls_alpha`, pass it through `UiCtx`, and add it to **both** `need_ui` and `idle`.
 4. If the pointer can rest on it, set `self.controls_hot` so it doesn't fade out. Give it an on/off toggle under General → On the scene.
 
-### 5.6 Ask the app to do something from the UI
+### 5.5 Ask the app to do something from the UI
 
 Add a `UiAction` variant, push it from the UI code, and handle it in the `for a in actions` loop near the end of `App::frame`. Don't give the UI new references to app internals.
 
-### 5.7 New audio features
+### 5.6 New audio features
 
 1. Compute the feature in `Analyzer::process` (`audio.rs`) at hop rate, and add it to `AudioFrame` and its `Default`.
 2. Smooth it in `VisState::update` with dt-based envelopes. Treat a stale frame (no packet for 150 ms) as silence.
@@ -450,7 +443,7 @@ Add a `UiAction` variant, push it from the UI code, and handle it in the `for a 
 
 Keep the capture callback cheap: no allocation or locking beyond the existing per-hop publish.
 
-### 5.8 Cut a release
+### 5.7 Cut a release
 
 1. Bump `version` in `Cargo.toml` (semver; the updater compares `major.minor.patch`), then `cargo build` so `Cargo.lock` follows, and commit both. The exe's version info (Properties → Details) follows the same version through `build.rs`.
 2. Tag and push: `git tag v1.2.0 && git push origin main v1.2.0`. The tag must be the version with a `v` in front; the workflow refuses a mismatch.
@@ -502,7 +495,7 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 | Change album-palette extraction or presets | `src/palette.rs` |
 | Change now-playing, art fetch or transport | `src/media.rs` |
 | Change volume control | `src/volume.rs` (worker), `ui/overlay.rs` `volume_bar`, `wake.rs` (slider widget) |
-| Change window modes, keys or frame pacing | `src/main.rs` |
+| Change window modes, mouse input or frame pacing | `src/main.rs` |
 | Change docking beside Spotify | `src/dock.rs` (finding and following the window, Win32 placement), `App::dock_sync` in `src/main.rs` (what goes where) |
 | Change CPU/RAM stats or working-set trimming | `src/sys.rs` |
 | Change update checks, download or the exe swap | `src/update.rs`, the release workflow in `.github/workflows/release.yml` |
@@ -519,7 +512,7 @@ Release build, RTX 5070 Ti, 2560×1440 at 170 Hz:
 - **FXC**: the DX12 backend compiles through FXC (HLSL SM5), which is slower and stricter than DXC. Very long unrolled loops or huge shaders can take seconds to compile or fail. Watch the "init" line in `report.txt` when adding heavy shaders.
 - **Uniform size**: `Params` is capped at 256 bytes (`PARAMS_BYTES`); `Params::set` asserts. For more data, use a storage buffer or texture owned by the scene in group 1.
 - **Name collisions** with `common.wgsl`: a scene shader can't define `G`, `A`, `P` (except its own `Params`), `vs_full`, `VsOut`, `hash11`, `band`, `pal`, `luma`, `crt_curve` and so on.
-- **`SceneId::ALL` order** sets the number keys and the startup default (`ALL[0]`). Reordering changes what users' keys do.
+- **`SceneId::ALL` order** sets the order of the scene buttons and the startup default (`ALL[0]`).
 - **egui `Area` sizing**: an Area keeps its previous size, so content that grows wraps or clips unless the Area's id changes.
 - **Interactive Areas at the window edge**: egui pushes an Area back on screen by default (`constrain`), and an Area whose content is placed with `allocate_rect` at absolute coordinates can end up with a hit rect far bigger than it looks. An invisible foreground Area like `dock_grip` then swallows every click under it. Use `.constrain(false)` and `allocate_exact_size`.
 - **Main-thread blocking**: a COM or WinRT call on the main thread (media control, volume) can stall frames for tens of milliseconds. Always go through the worker's channel.

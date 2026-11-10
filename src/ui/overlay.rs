@@ -175,7 +175,7 @@ impl UiState {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             let icon = if muted || level <= 0.0 { Icon::Muted } else { Icon::Speaker };
-                            let tip = if muted { "Unmute (M)" } else { "Mute (M)" };
+                            let tip = if muted { "Unmute" } else { "Mute" };
                             if icon_button(ui, t, icon, 30.0).on_hover_text(tip).clicked() {
                                 vol.set_muted(!muted);
                             }
@@ -242,7 +242,7 @@ pub(super) fn window_buttons(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &To
             ui.multiply_opacity(c.controls_alpha);
             frame.show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if !c.show_sidebar && icon_button(ui, t, Icon::ShowSidebar, 26.0).on_hover_text("Show sidebar (Tab)").clicked() {
+                    if !c.show_sidebar && icon_button(ui, t, Icon::ShowSidebar, 26.0).on_hover_text("Show sidebar").clicked() {
                         actions.push(UiAction::ShowSidebar);
                     }
                     if windowed {
@@ -277,7 +277,7 @@ pub(super) fn window_buttons(ctx: &egui::Context, scene: Rect, c: &UiCtx, t: &To
                         }
                     }
                     let fs = c.mode == WindowMode::Fullscreen;
-                    let tip = if fs { "Exit fullscreen (F11)" } else { "Fullscreen (F11)" };
+                    let tip = if fs { "Exit fullscreen" } else { "Fullscreen" };
                     if icon_button(ui, t, Icon::Fullscreen, 26.0).on_hover_text(tip).clicked() {
                         actions.push(UiAction::SetMode(if fs { WindowMode::Windowed } else { WindowMode::Fullscreen }));
                     }

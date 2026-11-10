@@ -9,7 +9,6 @@ pub(super) enum Icon {
     Audio,
     Palette,
     General,
-    Keys,
     Collapse,
     Expand,
     Close,
@@ -75,13 +74,6 @@ pub(super) fn paint_icon(p: &egui::Painter, icon: Icon, c: Pos2, col: Color32) {
                 let d = v(a.cos(), a.sin());
                 p.line_segment([c + d * 5.0, c + d * 7.5], Stroke::new(2.4_f32, col));
             }
-        }
-        Icon::Keys => {
-            p.rect_stroke(Rect::from_center_size(c, v(16.0, 11.0)), CornerRadius::same(2), s, StrokeKind::Middle);
-            for x in [-4.5, -1.5, 1.5, 4.5] {
-                p.circle_filled(c + v(x, -1.8), 0.9, col);
-            }
-            line(v(-3.5, 2.2), v(3.5, 2.2));
         }
         Icon::Collapse => {
             chevron(-2.5, 1.0);

@@ -13,7 +13,7 @@
 //!    `SceneSettings::config`.
 //! 4. A scene that shows the track (title, cover) overrides `Scene::track`; see disc.rs.
 //!
-//! The sidebar buttons, number keys, Next scene, auto-switch, Randomize and Reset all pick the
+//! The sidebar buttons, auto-switch, Randomize and Reset all pick the
 //! new scene up from there.
 
 pub mod ascii;
@@ -41,7 +41,7 @@ pub enum SceneId {
 }
 
 impl SceneId {
-    /// In the order of the sidebar buttons and the number keys.
+    /// In the order of the sidebar buttons.
     pub const ALL: [SceneId; 5] = [SceneId::Terminal, SceneId::GradientAscii, SceneId::Scope, SceneId::CrystalBall, SceneId::PictureDisc];
 
     pub fn name(self) -> &'static str {

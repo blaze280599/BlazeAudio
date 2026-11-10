@@ -119,9 +119,4 @@ impl Volume {
         self.shared.muted.store(muted, Ordering::Release);
         let _ = self.tx.send(Cmd::Mute(muted));
     }
-
-    /// Step by `delta` (0..1 scale), snapped to whole percent.
-    pub fn nudge(&self, delta: f32) {
-        self.set_level(((self.level() + delta) * 100.0).round() / 100.0);
-    }
 }

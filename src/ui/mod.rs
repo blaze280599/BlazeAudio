@@ -66,15 +66,13 @@ pub enum Section {
     Palette,
     /// Window modes, theme and the on-scene extras.
     General,
-    Hotkeys,
 }
 
-const SECTIONS: [(Section, &str, Icon); 5] = [
+const SECTIONS: [(Section, &str, Icon); 4] = [
     (Section::Visuals, "Visuals", Icon::Visuals),
     (Section::Audio, "Audio", Icon::Audio),
     (Section::Palette, "Palette", Icon::Palette),
     (Section::General, "General", Icon::General),
-    (Section::Hotkeys, "Hotkeys", Icon::Keys),
 ];
 
 pub struct UiState {

@@ -29,72 +29,54 @@ To check the download, compare its hash with `blazeaudio.exe.sha256` on the rele
 2. Play music. BlazeAudio visualizes everything your default output device plays.
 3. If the music app reports what's playing to Windows (Spotify does), you'll see the title, artist and cover, and the visuals take on the cover's colours.
 
-Settings live in the sidebar on the left. Press `F1` or `Tab` to show or hide it. When it's hidden, hovering over the visuals also shows a sidebar button next to the fullscreen button at the top right.
+Settings live in the sidebar on the left. **Hide sidebar** at its bottom puts it away; while it's hidden, hovering over the visuals shows a sidebar button next to the fullscreen button at the top right.
 
 ## Scenes
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/terminal.webp" alt="Faulty Terminal"><br><b>1 · Faulty Terminal</b></td>
-    <td width="50%"><img src="docs/media/ascii.webp" alt="Gradient ASCII"><br><b>2 · Gradient ASCII</b></td>
+    <td width="50%"><img src="docs/media/terminal.webp" alt="Faulty Terminal"><br><b>Faulty Terminal</b></td>
+    <td width="50%"><img src="docs/media/ascii.webp" alt="Gradient ASCII"><br><b>Gradient ASCII</b></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/media/scope.webp" alt="Phosphor Scope"><br><b>3 · Phosphor Scope</b> (polar mode)</td>
-    <td width="50%"><img src="docs/media/ball.webp" alt="Crystalized Ball"><br><b>4 · Crystalized Ball</b></td>
+    <td width="50%"><img src="docs/media/scope.webp" alt="Phosphor Scope"><br><b>Phosphor Scope</b> (polar mode)</td>
+    <td width="50%"><img src="docs/media/ball.webp" alt="Crystalized Ball"><br><b>Crystalized Ball</b></td>
   </tr>
 </table>
 
 Recorded live while playing music; the colours come from the track's album art.
 
-| | Scene | What it looks like |
-|---|---|---|
-| `1` | **Faulty Terminal** | A flickering CRT full of glyphs. The columns form a spectrum analyzer, highs make the glyphs churn, and beats tear rows sideways with an RGB-split glitch. |
-| `2` | **Gradient ASCII** | A soft light seen through a grid of characters, which get denser where it's brighter. Four light shapes. The edge follows the spectrum, and beats send rings of scrambled characters outward. |
-| `3` | **Phosphor Scope** | A vector oscilloscope on curved CRT glass, tracing the live waveform with a glowing afterglow, as a classic sweep or wrapped around a circle. |
-| `4` | **Crystalized Ball** | A glass sphere ringed with crackling electric strands, full of glowing dust. Beats surge the rim, fire sparks and toss the dust like a snow globe, and the spectrum shapes the flares around the rim. |
-| `5` | **Picture Disc** | Late-night music TV. A CD printed with the album cover spins at the edge of the screen beside a "now playing." card with the cover, title, artist and album over a dotted spectrum meter, all through a VHS tape look. Beats speed up the spin and knock the picture about. |
+| Scene | What it looks like |
+|---|---|
+| **Faulty Terminal** | A flickering CRT full of glyphs. The columns form a spectrum analyzer, highs make the glyphs churn, and beats tear rows sideways with an RGB-split glitch. |
+| **Gradient ASCII** | A soft light seen through a grid of characters, which get denser where it's brighter. Four light shapes. The edge follows the spectrum, and beats send rings of scrambled characters outward. |
+| **Phosphor Scope** | A vector oscilloscope on curved CRT glass, tracing the live waveform with a glowing afterglow, as a classic sweep or wrapped around a circle. |
+| **Crystalized Ball** | A glass sphere ringed with crackling electric strands, full of glowing dust. Beats surge the rim, fire sparks and toss the dust like a snow globe, and the spectrum shapes the flares around the rim. |
+| **Picture Disc** | Late-night music TV. A CD printed with the album cover spins at the edge of the screen beside a "now playing." card with the cover, title, artist and album over a dotted spectrum meter, all through a VHS tape look. Beats speed up the spin and knock the picture about. |
 
-Switch with the number keys, `S` for the next scene, or the buttons in **Visuals**. **Auto-switch** can move on by itself on each new track or on a timer.
+Switch with the buttons in **Visuals**. **Auto-switch** can move on by itself on each new track or on a timer.
 
 ## Features
 
 - **Album-art colours**: on each track change the visuals fade to colours taken from the cover. Five built-in palettes cover the times nothing is playing.
-- **Now playing**: a card with the cover and title appears on each track change (`T` shows it again). The sidebar has play/pause, skip and a progress bar. When nothing is playing, a hint in the same corner says so, or says there's no output device to listen to.
-- **Seeking**: hover the visuals for a wide timeline you can drag, click or scroll. `Left` / `Right` jump 5 s.
-- **Volume**: hovering also shows a volume bar for the Windows output volume. `Up` / `Down` change it and `M` mutes.
-- **Window modes**: windowed with the sidebar, or borderless fullscreen (`F11`) for just the visuals.
-- **Dock to Spotify**: the green **Dock to Spotify** button at the top right of the visuals (or **General → Dock to Spotify**) sticks the window to the left or right of Spotify's window (the spotify.com app or the Microsoft Store one) as a frameless panel with Windows 11's rounded corners. It matches Spotify's height, follows it when it moves or resizes, and comes to the front with it. It has no taskbar button of its own while docked: it goes away when Spotify is minimized and comes back with it. The same button then reads **Undock** and puts the window back where it was; it reads **Waiting for Spotify** while docking is on but Spotify isn't open or is maximized (click it to stop). It docks on the side you last chose in General. If Spotify closes, the panel goes back to a normal window and docks again when Spotify reopens. Drag the panel's outer edge to change its width; `Tab` or the sidebar button at the top right brings in the sidebar, which widens the panel outward, and **Hide sidebar** at its bottom puts it away. If the chosen side would be off the screen it uses the other one. While Spotify is maximized there's no room beside it, so the panel either floats as a normal window or hides, whichever you pick.
+- **Now playing**: a card with the cover and title appears on each track change. The sidebar has play/pause, skip and a progress bar. When nothing is playing, a hint in the same corner says so, or says there's no output device to listen to.
+- **Seeking**: hover the visuals for a wide timeline you can drag, click or scroll.
+- **Volume**: hovering also shows a volume bar for the Windows output volume, with a mute button.
+- **Window modes**: windowed with the sidebar, or borderless fullscreen for just the visuals. The button at the top right of the visuals, or a double-click on them, switches between the two.
+- **Dock to Spotify**: the green **Dock to Spotify** button at the top right of the visuals (or **General → Dock to Spotify**) sticks the window to the left or right of Spotify's window (the spotify.com app or the Microsoft Store one) as a frameless panel with Windows 11's rounded corners. It matches Spotify's height, follows it when it moves or resizes, and comes to the front with it. It has no taskbar button of its own while docked: it goes away when Spotify is minimized and comes back with it. The same button then reads **Undock** and puts the window back where it was; it reads **Waiting for Spotify** while docking is on but Spotify isn't open or is maximized (click it to stop). It docks on the side you last chose in General. If Spotify closes, the panel goes back to a normal window and docks again when Spotify reopens. Drag the panel's outer edge to change its width; the sidebar button at the top right brings in the sidebar, which widens the panel outward, and **Hide sidebar** at its bottom puts it away. If the chosen side would be off the screen it uses the other one. While Spotify is maximized there's no room beside it, so the panel either floats as a normal window or hides, whichever you pick.
 - **Look controls**: bloom, exposure, chromatic aberration, film grain, vignette and per-scene options, each resettable on its own. **Randomize** rolls a new look, **Undo** steps back and **Reset** restores the defaults.
 - **Lightweight**: about 0.1% CPU when idle and under 1% while playing, with around 20 MB of memory. It slows down when nothing is playing and stops rendering when hidden.
 - **Updates itself**: on launch it checks GitHub for a new release. By default it downloads it in the background and swaps it in, so the next start runs the new version (or click **Restart now** under General). Set **Updates** to **Notify** to just be told, or **Off** to never go online unless you click **Check now**.
 - **Remembers you**: settings, window position and size persist between runs. Only one copy runs at a time.
 
-## Controls
-
-| Key | Action |
-|-----|--------|
-| `F1` / `Tab` | Show / hide the sidebar |
-| `F11` / `F` / `Alt+Enter` / double-click | Fullscreen |
-| `1` – `5` | Faulty Terminal / Gradient ASCII / Phosphor Scope / Crystalized Ball / Picture Disc |
-| `S` | Next scene |
-| `Space` | Play / pause |
-| `N` / `P` | Next / previous track |
-| `Left` / `Right` | Seek 5 s back / forward |
-| `T` | Show the now-playing card |
-| `Up` / `Down` | Volume up / down |
-| `M` | Mute / unmute |
-| `F3` | Performance stats |
-| `Esc` | Close the drawer, then the sidebar, then leave fullscreen |
-
 ## Settings
 
-The sidebar has five sections:
+The sidebar has four sections:
 
 - **Visuals**: scene, auto-switch, the scene's own options, and the shared look effects
 - **Audio**: sensitivity, how fast bars rise and fall, beat sensitivity
 - **Palette**: album colours on or off, and the fallback palette
 - **General**: window and startup mode, docking to Spotify, theme (Dark, OLED black, Light), on-scene extras, updates
-- **Hotkeys**: the full key list
 
 A changed setting shows a reset button next to it; double-clicking its label also resets it. Settings are saved to `%APPDATA%\BlazeAudio\settings.json`.
 
@@ -127,7 +109,7 @@ BlazeAudio is written in Rust:
 
 Each scene is a self-contained module, so new scenes can be added without touching the rest of the app.
 
-**Working on the code?** [AGENTS.md](AGENTS.md) is the full technical guide: architecture, threading, the render pipeline, conventions, and step-by-step recipes for adding scenes, settings, hotkeys and UI. It's written so AI coding agents like Claude can follow it, and it's just as useful for people.
+**Working on the code?** [AGENTS.md](AGENTS.md) is the full technical guide: architecture, threading, the render pipeline, conventions, and step-by-step recipes for adding scenes, settings and UI. It's written so AI coding agents like Claude can follow it, and it's just as useful for people.
 
 ## Credits
 

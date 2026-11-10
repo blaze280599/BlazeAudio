@@ -22,15 +22,13 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::platform::windows::{WindowAttributesExtWindows, WindowExtWindows};
 use winit::window::{Fullscreen, Icon, ResizeDirection, Window, WindowId};
 
 use audio::{AudioEngine, AudioParams};
 use gpu::Gpu;
-use media::{MediaCmd, MediaWatcher, TrackInfo};
+use media::{MediaWatcher, TrackInfo};
 use palette::PRESETS;
-use scenes::SceneId;
 use settings::{AutoScene, DockFull, DockSide, Settings, WindowGeom, WindowMode};
 use update::Updater;
 use vis::VisState;
@@ -152,7 +150,6 @@ struct App {
     mode: WindowMode,
     windowed_rect: Option<(PhysicalPosition<i32>, PhysicalSize<u32>)>,
     show_sidebar: bool,
-    modifiers: ModifiersState,
 
     start: Instant,
     last_frame: Instant,
@@ -168,10 +165,6 @@ struct App {
     art_ver: u64,
     toast_t: f32,
     volume: volume::Volume,
-    /// Seconds left of the volume bar flashing up after a volume key.
-    volume_flash: f32,
-    /// Seconds left of the timeline flashing up after a seek key.
-    seek_flash: f32,
     /// Seconds the current scene has been on screen with music playing (for the scene timer).
     scene_clock: f32,
 
@@ -220,9 +213,8 @@ impl App {
             gfx: None,
             ui: ui::UiState::new(),
             windowed_rect: None,
-            // A docked panel starts as just the scene; Tab brings the sidebar in.
+            // A docked panel starts as just the scene; its show-sidebar button brings the sidebar in.
             show_sidebar: settings.start_mode == WindowMode::Windowed && settings.dock == DockSide::Off,
-            modifiers: ModifiersState::empty(),
             start: now,
             last_frame: now,
             next_frame: now,
@@ -236,8 +228,6 @@ impl App {
             art_ver: 0,
             toast_t: 0.0,
             volume: volume::Volume::new(),
-            volume_flash: 0.0,
-            seek_flash: 0.0,
             scene_clock: 0.0,
             device: (String::new(), false),
             device_ver: 0,
@@ -453,89 +443,9 @@ impl App {
         g.window.request_redraw();
     }
 
-    fn media(&mut self, cmd: MediaCmd) {
-        self.media.send(cmd);
-        // Show the card so there's feedback for a key press, even with the sidebar hidden.
-        self.toast_t = 6.0;
-    }
-
     fn toggle_mode(&mut self, m: WindowMode) {
         let target = if self.mode == m { WindowMode::Windowed } else { m };
         self.apply_mode(target);
-    }
-
-    fn handle_key(&mut self, code: KeyCode) {
-        let alt = self.modifiers.alt_key();
-        // Single-key shortcuts only (plus Alt+Enter), so Ctrl and Alt combos stay free.
-        if self.modifiers.control_key() || (alt && code != KeyCode::Enter) {
-            return;
-        }
-        match code {
-            KeyCode::F1 | KeyCode::Tab => self.set_sidebar_visible(!self.show_sidebar),
-            KeyCode::F11 | KeyCode::KeyF => self.toggle_mode(WindowMode::Fullscreen),
-            KeyCode::Enter if alt => self.toggle_mode(WindowMode::Fullscreen),
-            KeyCode::Digit1
-            | KeyCode::Digit2
-            | KeyCode::Digit3
-            | KeyCode::Digit4
-            | KeyCode::Digit5
-            | KeyCode::Digit6
-            | KeyCode::Digit7
-            | KeyCode::Digit8
-            | KeyCode::Digit9 => {
-                let digits = [
-                    KeyCode::Digit1,
-                    KeyCode::Digit2,
-                    KeyCode::Digit3,
-                    KeyCode::Digit4,
-                    KeyCode::Digit5,
-                    KeyCode::Digit6,
-                    KeyCode::Digit7,
-                    KeyCode::Digit8,
-                    KeyCode::Digit9,
-                ];
-                let i = digits.iter().position(|d| *d == code).unwrap_or(0);
-                if let Some(id) = SceneId::ALL.get(i) {
-                    self.settings.visual = *id;
-                }
-            }
-            KeyCode::ArrowUp | KeyCode::ArrowDown => {
-                self.volume.nudge(if code == KeyCode::ArrowUp { 0.02 } else { -0.02 });
-                self.volume_flash = 1.6;
-            }
-            KeyCode::KeyM => {
-                self.volume.set_muted(!self.volume.muted());
-                self.volume_flash = 1.6;
-            }
-            KeyCode::ArrowLeft | KeyCode::ArrowRight => {
-                let pb = self.media.playback();
-                if pb.can_seek && pb.duration > 0.0 {
-                    let step = if code == KeyCode::ArrowRight { 5.0 } else { -5.0 };
-                    // Stop short of the end, so a held key doesn't skip the track.
-                    let to = (pb.position_now() + step).clamp(0.0, (pb.duration - 1.0).max(0.0));
-                    self.media.send(MediaCmd::Seek(to));
-                    self.seek_flash = 1.6;
-                }
-            }
-            KeyCode::KeyT => self.toast_t = 6.0,
-            KeyCode::Space => self.media(MediaCmd::PlayPause),
-            KeyCode::KeyN => self.media(MediaCmd::Next),
-            KeyCode::KeyP => self.media(MediaCmd::Previous),
-            KeyCode::KeyS => self.settings.visual = self.settings.visual.next(),
-            KeyCode::F3 => self.settings.show_stats = !self.settings.show_stats,
-            KeyCode::Escape => {
-                if self.ui.drawer.is_some() {
-                    self.ui.drawer = None;
-                    self.settings.save();
-                } else if self.show_sidebar && self.mode != WindowMode::Windowed {
-                    self.set_sidebar_visible(false);
-                } else if self.mode != WindowMode::Windowed {
-                    self.apply_mode(WindowMode::Windowed);
-                }
-                // Windowed with nothing to close: Esc does nothing. Quitting is the close button.
-            }
-            _ => {}
-        }
     }
 
     fn sync_media(&mut self) {
@@ -600,8 +510,6 @@ impl App {
         }
 
         self.toast_t = (self.toast_t - dt).max(0.0);
-        self.volume_flash = (self.volume_flash - dt).max(0.0);
-        self.seek_flash = (self.seek_flash - dt).max(0.0);
 
         // Audio -> visual state.
         // BLAZE_IGNORE_AUDIO=1 renders as if nothing is playing (for measuring the idle path).
@@ -614,9 +522,9 @@ impl App {
         // Resting on the volume bar or timeline keeps the controls up.
         let still = if self.ui.controls_hot { 0.0 } else { self.last_mouse_move.elapsed().as_secs_f32() };
         let controls_alpha = (1.0 - (still - 2.0) / 0.5).clamp(0.0, 1.0);
-        let volume_alpha = if self.settings.show_volume { controls_alpha.max((self.volume_flash / 0.4).min(1.0)) } else { 0.0 };
+        let volume_alpha = if self.settings.show_volume { controls_alpha } else { 0.0 };
         let has_timeline = self.settings.show_timeline && !self.track.title.is_empty() && self.track.playback.duration > 0.0;
-        let timeline_alpha = if has_timeline { controls_alpha.max((self.seek_flash / 0.4).min(1.0)) } else { 0.0 };
+        let timeline_alpha = if has_timeline { controls_alpha } else { 0.0 };
         // A hint over a silent scene with no track. Without the sidebar it shows only for the
         // first seconds after launch or while the mouse moves, so idle frames stay free of UI.
         let empty = self.settings.show_track_toast && self.track.title.is_empty() && (self.vis.silent_for > 3.0 || !self.device.1);
@@ -982,19 +890,6 @@ impl ApplicationHandler<dock::Wake> for App {
                 if !o {
                     if let Some(g) = &self.gfx {
                         g.window.request_redraw();
-                    }
-                }
-            }
-            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
-            // Gaining focus replays keys still held as synthetic presses; coming back with
-            // Alt+Tab, that's a Tab, which would toggle the sidebar.
-            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
-                let wants_kb = self.gfx.as_ref().is_some_and(|g| g.egui_ctx.wants_keyboard_input());
-                // Holding an arrow key keeps changing the volume or seeking; other keys fire once.
-                let arrow = matches!(event.physical_key, PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight));
-                if event.state == ElementState::Pressed && (!event.repeat || arrow) && !wants_kb && !(consumed && event.physical_key != PhysicalKey::Code(KeyCode::F1)) {
-                    if let PhysicalKey::Code(code) = event.physical_key {
-                        self.handle_key(code);
                     }
                 }
             }

@@ -118,11 +118,11 @@ pub(super) fn time_bubble(ctx: &egui::Context, anchor: Pos2, text: &str, t: &Tok
 /// Previous / play-pause / next, centred. Buttons the app doesn't support are dimmed.
 pub(super) fn transport(ui: &mut egui::Ui, t: &Tokens, pb: &Playback, actions: &mut Vec<UiAction>) {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), Sense::hover());
-    let play = if pb.playing { (Icon::Pause, "Pause (Space)") } else { (Icon::Play, "Play (Space)") };
+    let play = if pb.playing { (Icon::Pause, "Pause") } else { (Icon::Play, "Play") };
     let buttons = [
-        (-40.0, Icon::Previous, "Previous track (P)", pb.can_previous, MediaCmd::Previous, false),
+        (-40.0, Icon::Previous, "Previous track", pb.can_previous, MediaCmd::Previous, false),
         (0.0, play.0, play.1, pb.can_play_pause, MediaCmd::PlayPause, true),
-        (40.0, Icon::Next, "Next track (N)", pb.can_next, MediaCmd::Next, false),
+        (40.0, Icon::Next, "Next track", pb.can_next, MediaCmd::Next, false),
     ];
     for (i, (dx, icon, tip, enabled, cmd, primary)) in buttons.into_iter().enumerate() {
         let r = Rect::from_center_size(rect.center() + egui::vec2(dx, 0.0), Vec2::splat(28.0));
